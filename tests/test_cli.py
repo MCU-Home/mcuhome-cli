@@ -95,7 +95,7 @@ def test_validate_by_file_path(capsys) -> None:
     assert "temperature_measurement (0x0402 rev 4, 3 attributes)" in out
     assert "baro.temperature -> endpoint 1 0x0402/0x0000, every 10 s" in out
     assert "report on 0.1 °C change" in out
-    assert "snippets: matter, boot-mode" in out
+    assert "snippets: debug-rtt, matter, boot-mode" in out
 
 
 def test_validate_writes_nothing(tmp_path, monkeypatch) -> None:
@@ -188,7 +188,11 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
 def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
     tmp_path, monkeypatch
 ) -> None:
-    """Per image, because sysbuild would otherwise give them to both."""
+    """Per image, because sysbuild would otherwise give them to both.
+
+    ``-S debug-rtt`` collapses into the always-included log transport
+    instead of applying the snippet twice; a new snippet appends.
+    """
     seen: list[str] = []
 
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
@@ -197,10 +201,11 @@ def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
         "run_build",
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "-S", "debug-rtt"]
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    argv += ["-S", "debug-rtt", "-S", "thread-sed"]
     assert main(argv) == 0
     assert "--snippet" not in seen
-    assert f"-D{APP_DIR}_SNIPPET=matter;boot-mode;debug-rtt" in seen
+    assert f"-D{APP_DIR}_SNIPPET=debug-rtt;matter;boot-mode;thread-sed" in seen
     assert "-Dmcuboot_SNIPPET=boot-mode" in seen
 
 
@@ -555,7 +560,7 @@ def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
     assert str(tmp_path / MANIFEST_FILE) in capsys.readouterr().out
     document = json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8"))
     assert document["device"]["name"] == "bmp180-node"
-    assert document["build"]["snippets"] == ["matter", "boot-mode"]
+    assert document["build"]["snippets"] == ["debug-rtt", "matter", "boot-mode"]
     assert document["signing"]["arguments"]["slot-size"] == 912 * 1024
 
 

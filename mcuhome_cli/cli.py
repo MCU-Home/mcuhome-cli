@@ -967,7 +967,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         help=(
             "Zephyr snippet to apply on top of the ones the configuration needs "
-            "(repeatable); debug-rtt is the usual one during bring-up"
+            "(repeatable); the debug-rtt log transport is always already among them"
         ),
     )
     # ADR 0007: the builder container is the build environment, --native
