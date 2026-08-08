@@ -11,19 +11,20 @@
 #
 # The test gate needs the `mcuhome` builder library, which is a private
 # repository while MCUHome incubates: it is checked out with a read-only
-# deploy key stored as the MCUHOME_DEPLOY_KEY secret of this repository.
-# One-time setup (repository settings, no tooling required):
+# deploy key ("ci-cli-read" on mcu-home/mcuhome) stored as the
+# MCUHOME_DEPLOY_KEY secret of this repository. To rotate it
+# (repository settings, no tooling required):
 #
-#   1. ssh-keygen -t ed25519 -N '' -C cli-ci -f mcuhome-deploy-key
+#   1. ssh-keygen -t ed25519 -N '' -C ci-cli-read -f mcuhome-deploy-key
 #   2. mcu-home/mcuhome → Settings → Deploy keys → add
 #      mcuhome-deploy-key.pub, read-only
-#   3. mcu-home/cli → Settings → Secrets and variables → Actions → new
+#   3. mcu-home/cli → Settings → Secrets and variables → Actions →
 #      secret MCUHOME_DEPLOY_KEY with the private key file's content
 #   4. delete both local key files
 #
-# Until that secret exists the pytest job skips itself with a warning
-# instead of failing. Once the packages are published, the checkout
-# becomes a plain pip install and the key goes away.
+# If the secret goes missing the checkout step fails, and that is
+# correct: pytest is a required gate. Once the packages are published,
+# the checkout becomes a plain pip install and the key goes away.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -63,24 +64,11 @@ jobs:
   test:
     name: pytest
     runs-on: ubuntu-latest
-    # The secrets context is not available in job-level `if`, so the
-    # presence check rides in as an env flag and gates every step.
-    env:
-      DEPLOY_KEY_AVAILABLE: ${{ secrets.MCUHOME_DEPLOY_KEY != '' }}
     steps:
-      - name: Explain a skipped run
-        if: env.DEPLOY_KEY_AVAILABLE != 'true'
-        run: >
-          echo "::warning::MCUHOME_DEPLOY_KEY is not configured, so the
-          private mcuhome library cannot be checked out and pytest is
-          skipped — see the setup note at the top of this workflow."
-
       - name: Checkout
-        if: env.DEPLOY_KEY_AVAILABLE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Checkout the mcuhome builder library
-        if: env.DEPLOY_KEY_AVAILABLE == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/mcuhome
@@ -88,17 +76,14 @@ jobs:
           path: .deps/mcuhome
 
       - name: Set up Python
-        if: env.DEPLOY_KEY_AVAILABLE == 'true'
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
 
       - name: Install
-        if: env.DEPLOY_KEY_AVAILABLE == 'true'
         run: |
           python -m pip install --disable-pip-version-check ./.deps/mcuhome
           python -m pip install --disable-pip-version-check -e '.[dev]'
 
       - name: pytest
-        if: env.DEPLOY_KEY_AVAILABLE == 'true'
         run: pytest
