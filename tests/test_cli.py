@@ -342,6 +342,10 @@ def test_a_missing_image_is_a_plain_refusal_after_a_finished_generation(
         container, "_run_quiet", lambda command, env: 0 if "version" in command else 1
     )
     monkeypatch.setenv(container.CCACHE_DIR_VAR, str(tmp_path / "cache"))
+    # The refusal under test is the image's, which comes after workspace
+    # discovery — and this test must pass on machines (CI among them)
+    # where the checkout does not live inside a west workspace.
+    monkeypatch.setattr(workspace, "require_topdir", lambda *starts: tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-native"]) == 1
     captured = capsys.readouterr()
@@ -698,6 +702,10 @@ def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) ->
         return 0, ""
 
     monkeypatch.setattr(imgtool, "_run", fake_imgtool)
+    # Discovery would refuse on machines without a west workspace or an
+    # installed imgtool; the override names a script that never runs,
+    # because _run — the only thing that would run it — is replaced.
+    monkeypatch.setenv(imgtool.IMGTOOL_VAR, str(tmp_path / "imgtool.py"))
     assert main(["sign", str(out_dir), "--signing-key", str(tmp_path / "signing.key")]) == 0
 
     out = capsys.readouterr().out
