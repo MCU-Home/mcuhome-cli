@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcuhome-cli"
+version = "0.1.0.dev0"
+description = "The mcuhome command line: a thin shell over the MCUHome builder library."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "The MCUHome Contributors" }]
+keywords = [
+  "zephyr",
+  "matter",
+  "thread",
+  "home-assistant",
+  "firmware",
+  "esphome-alternative",
+]
+classifiers = [
+  "Development Status :: 1 - Planning",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Topic :: Home Automation",
+]
+# The one dependency, on purpose: this package is the command shell of
+# the repo family (mcuhome = SDK + builder library, cli = this shell) and
+# adds no behavior of its own. Neither package is on PyPI while the
+# repositories are private — see the README for the dev install.
+dependencies = ["mcuhome"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/mcu-home/cli"
+Issues = "https://github.com/mcu-home/cli/issues"
+
+[project.scripts]
+mcuhome = "mcuhome_cli.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["mcuhome_cli"]
+
+# Same ruff settings as the mcuhome repository; bump the pinned version
+# (CI, currently 0.16.1) together with mcuhome's.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

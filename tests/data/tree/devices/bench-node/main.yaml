@@ -1,0 +1,40 @@
+# Test fixture: a device that leans on defaults.
+#
+# No endpoint id (numbered automatically), no sampling period, no report
+# delta, no measurement range, no explicit Thread role, no I2C address —
+# every one of those is resolved, and the resolved values are asserted.
+# The friendly name comes from secrets.yaml so the fixture tree exercises
+# !secret as well, and so do the commissioning credentials — this fixture
+# is the "real device" shape, with a passcode and a salt of its own,
+# exactly as `mcuhome init-pairing --secrets` writes them.
+
+device:
+  name: bench-node
+  friendly_name: !secret device_label
+  board: nrf7002dk/nrf5340/cpuapp
+  power:
+    source: battery
+
+network:
+  thread: {}
+  matter:
+    enabled: true
+    discriminator: !secret bench_node_discriminator
+    passcode: !secret bench_node_passcode
+    salt: !secret bench_node_salt
+
+hardware:
+  buses:
+    i2c0:
+      controller: arduino_i2c
+  peripherals:
+    baro:
+      driver: bosch,bmp180
+      bus: i2c0
+
+node:
+  endpoints:
+    - device_type: temperature_sensor
+      clusters:
+        temperature_measurement:
+          source: baro.temperature

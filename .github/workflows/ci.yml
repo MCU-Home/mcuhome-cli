@@ -1,0 +1,78 @@
+# SPDX-FileCopyrightText: 2026 The MCUHome Contributors
+# SPDX-License-Identifier: Apache-2.0
+#
+# CI for the mcuhome command line. Two gates:
+#
+#   lint  — the same ruff checks the mcuhome repository runs; the pinned
+#           version is bumped together with mcuhome's.
+#   test  — pytest over the CLI behavior tests, including a smoke test
+#           that the console entry point loads and `--help` works for
+#           every command.
+#
+# The test gate needs the `mcuhome` builder library, which is a private
+# repository while MCUHome incubates: it is checked out with a read-only
+# deploy key stored as the MCUHOME_DEPLOY_KEY secret of this repository
+# (the matching public key is a deploy key on mcu-home/mcuhome). Once
+# the packages are published, that checkout becomes a plain pip install.
+#
+# All actions are pinned to commit SHAs, not tags.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # Pinned to the same version as mcuhome's CI; bump both together.
+      - name: Install lint tools
+        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+
+      - name: ruff check
+        run: ruff check .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+  test:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Checkout the mcuhome builder library
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome
+          ssh-key: ${{ secrets.MCUHOME_DEPLOY_KEY }}
+          path: .deps/mcuhome
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: |
+          python -m pip install --disable-pip-version-check ./.deps/mcuhome
+          python -m pip install --disable-pip-version-check -e '.[dev]'
+
+      - name: pytest
+        run: pytest
