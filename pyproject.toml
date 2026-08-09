@@ -6,7 +6,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "mcuhome-cli"
+# The plain name, on purpose (ADR 0020 decision 2): `pip install
+# mcuhome` should yield the command a user expects, and no other package
+# has a better claim to it — the library ships as mcuhome-model,
+# mcuhome-workbench and mcuhome-compiler, the services as
+# mcuhome-dashboard and mcuhome-build-server.
+name = "mcuhome"
 version = "0.1.0.dev0"
 description = "The mcuhome command line: a thin shell over the MCUHome builder library."
 readme = "README.md"

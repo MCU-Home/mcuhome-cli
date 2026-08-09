@@ -3,15 +3,18 @@ SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# mcuhome-cli
+# mcuhome
 
 The `mcuhome` command line — a thin shell over the
-[MCUHome builder library](https://github.com/mcu-home/mcuhome).
+[MCUHome library family](https://github.com/mcu-home/mcuhome). The
+distribution carries the plain name (`pip install mcuhome`) because it
+is what puts the `mcuhome` command on PATH; the library ships as
+`mcuhome-model`, `mcuhome-workbench` and `mcuhome-compiler`.
 
 It parses arguments and renders results; every stage of the actual
 pipeline (validate, generate, compile, sign) is a call into the
-`mcuhome` package. Programs never use this shell: they embed
-`mcuhome.api`, the supported programmatic surface.
+library. Programs never use this shell: they embed
+`mcuhome.workbench.api`, the supported programmatic surface.
 
 ```
 mcuhome new          <device>      # scaffold a device folder
