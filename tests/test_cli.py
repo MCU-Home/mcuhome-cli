@@ -10,10 +10,12 @@ from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
-from mcuhome import __version__, container, imgtool, signing, workspace
-from mcuhome.generate import APP_DIR
-from mcuhome.manifest import MANIFEST_FILE
-from mcuhome.model import MODEL_VERSION
+from mcuhome.compiler import container, workspace
+from mcuhome.compiler.generate import APP_DIR
+from mcuhome.model import __version__
+from mcuhome.model.manifest import MANIFEST_FILE
+from mcuhome.model.model import MODEL_VERSION
+from mcuhome.workbench import imgtool, signing
 
 from mcuhome_cli.cli import main
 

@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mcuhome import container
+from mcuhome.compiler import container
 
 TESTS_DIR = Path(__file__).resolve().parent
 DATA_DIR = TESTS_DIR / "data"

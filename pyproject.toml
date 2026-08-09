@@ -28,10 +28,12 @@ classifiers = [
   "Topic :: Home Automation",
 ]
 # The one dependency, on purpose: this package is the command shell of
-# the repo family (mcuhome = SDK + builder library, cli = this shell) and
-# adds no behavior of its own. Neither package is on PyPI while the
-# repositories are private — see the README for the dev install.
-dependencies = ["mcuhome"]
+# the library family and adds no behavior of its own. mcuhome-compiler
+# pulls mcuhome-workbench and mcuhome-model with it, and the CLI is the
+# local-dev case (ADR 0020 §3) — the one consumer entitled to all three.
+# None of them is on PyPI while the repositories are private — see the
+# README for the dev install.
+dependencies = ["mcuhome-compiler"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

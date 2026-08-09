@@ -64,29 +64,16 @@ import os
 import sys
 from pathlib import Path
 
-from mcuhome import (
-    __version__,
-    api,
-    configschema,
-    container,
-    export,
-    imgtool,
-    ota,
-    otafile,
-    pairing,
-    provision,
-    registry,
-    scaffold,
-    signing,
-    workspace,
-)
-from mcuhome import manifest as manifest_module
-from mcuhome import report as report_module
-from mcuhome import tree as tree_module
-from mcuhome.errors import BuildError, ConfigError, MCUHomeError
-from mcuhome.generate import APP_DIR, write_tree
-from mcuhome.model import DeviceModel, PairingModel
-from mcuhome.tree import ConfigTree, resolve_device
+from mcuhome.compiler import container, workspace
+from mcuhome.compiler import report as report_module
+from mcuhome.compiler.generate import APP_DIR, write_tree
+from mcuhome.model import __version__, export, ota, pairing, registry
+from mcuhome.model import manifest as manifest_module
+from mcuhome.model.errors import BuildError, ConfigError, MCUHomeError
+from mcuhome.model.model import DeviceModel, PairingModel
+from mcuhome.workbench import api, configschema, imgtool, otafile, provision, scaffold, signing
+from mcuhome.workbench import tree as tree_module
+from mcuhome.workbench.tree import ConfigTree, resolve_device
 
 __all__ = [
     "BUILD_DIR",
