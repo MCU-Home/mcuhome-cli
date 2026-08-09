@@ -60,16 +60,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
 from mcuhome import (
     __version__,
     api,
+    configschema,
     container,
     export,
     imgtool,
     ota,
+    otafile,
     pairing,
     provision,
     registry,
@@ -78,6 +81,7 @@ from mcuhome import (
     workspace,
 )
 from mcuhome import manifest as manifest_module
+from mcuhome import report as report_module
 from mcuhome import tree as tree_module
 from mcuhome.errors import BuildError, ConfigError, MCUHomeError
 from mcuhome.generate import APP_DIR, write_tree
@@ -97,6 +101,20 @@ __all__ = [
 #: A sibling of ``devices/``, never inside it — build output must not turn
 #: up in the user's config diffs (builder-pipeline.md §2).
 BUILD_DIR = "build"
+
+
+def _process_env() -> dict[str, str]:
+    """This process's environment, as the library wants to be handed it.
+
+    The library takes the environment as an argument everywhere and reads
+    :data:`os.environ` nowhere, because one library process serves several
+    callers (a dashboard, a build server) and "the environment" is then
+    nobody's in particular. A command line is the caller for which the
+    process environment *is* the user's answer, so this is where that
+    conversion happens — once, by name, instead of as a default nobody
+    can see.
+    """
+    return dict(os.environ)
 
 
 def load_device_model(entry: Path, *, tree: ConfigTree) -> DeviceModel:
@@ -293,7 +311,7 @@ def _print_json(data: object) -> None:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    tree, entry = resolve_device(args.device, config_root=args.config_root)
+    tree, entry = resolve_device(args.device, cwd=Path.cwd(), config_root=args.config_root)
     args.json_root = tree.root
     result = api.validate_device(entry, tree=tree)
     if getattr(args, "json", False):
@@ -353,7 +371,7 @@ def _resolve_build_key(args: argparse.Namespace) -> tuple[Path, signing.SigningK
     a Matter compile.
     """
     if not args.no_sign:
-        key = signing.signing_key(args.signing_key)
+        key = signing.signing_key(args.signing_key, env=_process_env())
         return key.path, key
     if args.public_key is None:
         raise BuildError(
@@ -420,7 +438,7 @@ def _build_input(args: argparse.Namespace) -> tuple[DeviceModel, Path]:
         # every build server does — passes --build-dir.
         root = Path.cwd()
     else:
-        tree, entry = resolve_device(args.device, config_root=args.config_root)
+        tree, entry = resolve_device(args.device, cwd=Path.cwd(), config_root=args.config_root)
         args.json_root = tree.root
         model = load_device_model(entry, tree=tree)
         root = tree.root
@@ -465,7 +483,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
     # MCUHOME_JOBS beats auto-detection. Resolved once, here, on the host —
     # the container path needs the same number for its own docker run, not
     # a second guess made from inside the container.
-    resolved_jobs = workspace.resolve_jobs(cli_jobs=args.jobs)
+    resolved_jobs = workspace.resolve_jobs(env=_process_env(), cli_jobs=args.jobs)
     bootloader_snippets = () if scheme is None else scheme.bootloader_snippets
     # Absolute from here on: the build runs with the workspace top
     # directory as its working directory (that is how west finds the
@@ -481,6 +499,14 @@ def _cmd_build(args: argparse.Namespace) -> int:
         "signing_key": key_path,
         "detached_signing": args.no_sign,
         "jobs": resolved_jobs.value,
+        "env": _process_env(),
+        # Both paths look for the west workspace at the MCUHome module
+        # first and here second. The library states neither for itself:
+        # `mcuhome` on a command line *is* the local-dev case (ADR 0020
+        # decision E18), and a command line is the one caller entitled to
+        # say "where I am installed" and "where I was run".
+        "module_dir": workspace.installed_module_dir(),
+        "cwd": Path.cwd(),
     }
     # ADR 0007: the container is the build environment, --native is the
     # escape hatch for a contributor who already has a west workspace.
@@ -525,7 +551,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
             out_dir=out_dir.resolve(),
             signed=plan.build_dir / plan.app_dir.name / "zephyr" / "zephyr.signed.bin",
         )
-    manifest = manifest_module.build_manifest(
+    manifest = report_module.build_manifest(
         model,
         out_dir=out_dir.resolve(),
         build_dir=plan.build_dir,
@@ -538,7 +564,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
         merged=merged,
         ota_image=ota_image,
     )
-    manifest_path = manifest_module.write_manifest(manifest, out_dir=out_dir.resolve())
+    manifest_path = report_module.write_manifest(manifest, out_dir=out_dir.resolve())
 
     if as_json:
         _print_json(
@@ -590,9 +616,9 @@ def _write_ota(model: DeviceModel, *, out_dir: Path, signed: Path) -> ota.OtaIma
     parameters = manifest_module.ota_parameters(model)
     if parameters is None or not signed.is_file():
         return None
-    return ota.write_ota_image(
+    return otafile.write_ota_image(
         payload=signed,
-        output=out_dir / ota.ota_file_name(model.device.name, parameters.version),
+        output=out_dir / otafile.ota_file_name(model.device.name, parameters.version),
         vendor_id=parameters.vendor_id,
         product_id=parameters.product_id,
         version=parameters.version,
@@ -684,7 +710,7 @@ def _print_commissioning(model: DeviceModel) -> None:
 
 
 def _cmd_init_pairing(args: argparse.Namespace) -> int:
-    tree, entry = resolve_device(args.device, config_root=args.config_root)
+    tree, entry = resolve_device(args.device, cwd=Path.cwd(), config_root=args.config_root)
     result = provision.init_pairing(
         entry,
         secrets_file=tree.secrets_file,
@@ -716,7 +742,9 @@ def _pairing_model(credentials: pairing.Pairing) -> PairingModel:
 
 
 def _cmd_new(args: argparse.Namespace) -> int:
-    created = scaffold.new_device(args.device, board=args.board, config_root=args.config_root)
+    created = scaffold.new_device(
+        args.device, board=args.board, cwd=Path.cwd(), config_root=args.config_root
+    )
     if created.created_tree:
         print(f"Started a configuration tree in {created.tree.root}.")
     print(f"Wrote {created.entry}.")
@@ -734,7 +762,16 @@ def _cmd_new(args: argparse.Namespace) -> int:
 
 
 def _cmd_sign(args: argparse.Namespace) -> int:
-    plan = imgtool.sign_build(Path(args.target), key=args.signing_key)
+    plan = imgtool.sign_build(
+        Path(args.target),
+        key=args.signing_key,
+        env=_process_env(),
+        # Where MCUboot's own imgtool would be, if this machine happens to
+        # be a west workspace. It usually is not: signing runs where the
+        # key is (ADR 0015 decision 8), and imgtool.sign_build no longer
+        # goes looking by itself.
+        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
+    )
     data = manifest_module.record_signature(
         manifest_module.read_manifest(plan.manifest_path),
         out_dir=plan.out_dir,
@@ -790,9 +827,9 @@ def _sign_ota(data: dict, *, out_dir: Path, outputs: list[Path]) -> ota.OtaImage
         return None
     parameters = manifest_module.OtaEntry.from_dict(block)
     device = str((data.get("device") or {}).get("name") or "device")
-    return ota.write_ota_image(
+    return otafile.write_ota_image(
         payload=signed,
-        output=out_dir / ota.ota_file_name(device, parameters.version),
+        output=out_dir / otafile.ota_file_name(device, parameters.version),
         vendor_id=parameters.vendor_id,
         product_id=parameters.product_id,
         version=parameters.version,
@@ -800,7 +837,7 @@ def _sign_ota(data: dict, *, out_dir: Path, outputs: list[Path]) -> ota.OtaImage
 
 
 def _cmd_public_key(args: argparse.Namespace) -> int:
-    key = signing.signing_key(args.signing_key, create=False)
+    key = signing.signing_key(args.signing_key, env=_process_env(), create=False)
     pem = signing.public_key_pem(key.path.read_text(encoding="utf-8"))
     if args.output is None:
         print(pem, end="")
@@ -821,7 +858,7 @@ def _cmd_public_key(args: argparse.Namespace) -> int:
 
 #: What ``mcuhome schema`` can emit, and what produces it.
 SCHEMA_EXPORTS = {
-    "config": export.config_json_schema,
+    "config": configschema.config_json_schema,
     "registry": export.registry_data,
 }
 
@@ -999,7 +1036,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "ECDSA P-256 private key to sign the firmware with (default: "
-            f"{signing.default_key_path()}, generated on first use; the "
+            f"{signing.default_key_path(_process_env())}, generated on first use; the "
             f"{signing.KEY_VAR} environment variable sets it too)"
         ),
     )
@@ -1052,7 +1089,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "ECDSA P-256 private key to sign with (default: "
-            f"{signing.default_key_path()}; the {signing.KEY_VAR} environment "
+            f"{signing.default_key_path(_process_env())}; the {signing.KEY_VAR} environment "
             "variable sets it too). Never generated here: a build has to be signed "
             "with the key its device's bootloader already carries."
         ),
@@ -1076,7 +1113,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         metavar="PATH",
-        help=f"which key to take the public half of (default: {signing.default_key_path()})",
+        help=(
+            "which key to take the public half of "
+            f"(default: {signing.default_key_path(_process_env())})"
+        ),
     )
     add_common_options(public_key_parser)
     public_key_parser.set_defaults(func=_cmd_public_key)
@@ -1162,7 +1202,10 @@ def main(argv: list[str] | None = None) -> int:
                 {"ok": False, "errors": error.to_dicts(root=getattr(args, "json_root", None))}
             )
             return 1
-        print(error.render(), file=sys.stderr)
+        # The working directory is the CLI's to supply: it is what makes
+        # "main.yaml, line 5" shorter than an absolute path, and it is the
+        # one place in the system that legitimately knows it.
+        print(error.render(Path.cwd()), file=sys.stderr)
         return 1
 
 
