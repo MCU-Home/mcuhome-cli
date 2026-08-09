@@ -81,8 +81,15 @@ jobs:
           python-version: "3.11"
 
       - name: Install
+        # The library is three distributions over one namespace since the
+        # E35 migration; the repo root deliberately ships nothing. One
+        # invocation, so pip resolves the exact sibling pins against the
+        # copies being installed rather than against an index.
         run: |
-          python -m pip install --disable-pip-version-check ./.deps/mcuhome
+          python -m pip install --disable-pip-version-check \
+            ./.deps/mcuhome/packaging/model \
+            ./.deps/mcuhome/packaging/workbench \
+            ./.deps/mcuhome/packaging/compiler
           python -m pip install --disable-pip-version-check -e '.[dev]'
 
       - name: pytest
