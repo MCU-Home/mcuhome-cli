@@ -20,9 +20,19 @@ package adds no behavior of its own beyond the command surface.
     mcuhome clean        <device|--all>
 
 ``clean`` exists so the surface is stable and refuses cleanly rather than
-being missing; everything else is implemented. ``build`` compiles in the
-MCUHome builder image (ADR 0007, :mod:`mcuhome.container`); ``--native``
-compiles on the host toolchain instead (:mod:`mcuhome.workspace`).
+being missing; everything else is implemented.
+
+``build`` selects one of the three build methods (ADR 0020 decision 6),
+never a code path: ``local`` compiles in a build container on this
+machine and is the default (E54), ``local-dev`` compiles on the host
+toolchain, and ``remote`` compiles on a build server. There is exactly
+one spelling for each — ``--method <name>`` and nothing else (E62). The
+choice is a ladder: ``--method``, then :data:`METHOD_VAR`, then the
+default. Whichever ran,
+what comes back is an **unsigned** image plus a build report, and one
+host-side step signs it (:func:`_sign_after_build`, E56) — so the private
+key is absent from every build on every method, not merely from the ones
+that happen to run elsewhere.
 
 ``validate`` and ``build`` take ``--json``, which replaces the whole
 human rendering with one machine-readable document on stdout — the
@@ -59,20 +69,29 @@ tree, and it writes into exactly one file: the device's own
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
-from mcuhome.compiler import container, localbuild, workspace
-from mcuhome.compiler import report as report_module
-from mcuhome.compiler.generate import APP_DIR, write_tree
+from mcuhome.compiler import container, workspace
+from mcuhome.compiler.generate import write_tree
 from mcuhome.model import __version__, export, ota, pairing, registry
 from mcuhome.model import manifest as manifest_module
 from mcuhome.model.errors import BuildError, ConfigError, MCUHomeError
 from mcuhome.model.model import DeviceModel, PairingModel
-from mcuhome.workbench import api, configschema, imgtool, otafile, provision, scaffold, signing
+from mcuhome.workbench import (
+    api,
+    configschema,
+    imgtool,
+    otafile,
+    provision,
+    scaffold,
+    signing,
+)
 from mcuhome.workbench import tree as tree_module
 from mcuhome.workbench.tree import ConfigTree, resolve_device
 
@@ -93,6 +112,16 @@ BUILD_DIR = "build"
 #: ``PATH``-style environment variable naming SDK source directories for
 #: the default (container) build path. ``--sdk-source`` beats it.
 SDK_SOURCE_VAR = "MCUHOME_SDK_SOURCE"
+
+#: Which of the three build methods runs, when no flag says. Second rung
+#: of the ladder below; the name is this implementation's and has not
+#: been decided by the product owner — see :func:`_resolve_method`.
+METHOD_VAR = "MCUHOME_BUILD_METHOD"
+
+#: The build server the ``remote`` method talks to, and the bearer token
+#: for it (E53). ``--server``/``--token`` beat them.
+SERVER_VAR = "MCUHOME_BUILD_SERVER"
+TOKEN_VAR = "MCUHOME_BUILD_TOKEN"
 
 
 def _process_env() -> dict[str, str]:
@@ -437,17 +466,73 @@ def _build_input(args: argparse.Namespace) -> tuple[DeviceModel, Path]:
     return model, args.build_dir or root / BUILD_DIR / model.device.name
 
 
+def _resolve_method(args: argparse.Namespace, env: dict[str, str]) -> str:
+    """Which build method runs: flag, then variable, then the default (E53/E54).
+
+    The ladder E53 fixed for the remote server address, applied to the
+    method itself: an explicit flag beats the environment, and the
+    environment beats the default, which is the local build container
+    (E54). E53's third rung — a file under ``$XDG_CONFIG_HOME/mcuhome/`` —
+    is deliberately **not** implemented here: the decision names the
+    directory and no file format, and inventing one would fix a
+    configuration surface that has not been decided.
+
+    ``--method <name>`` is the only spelling of a method (E62). The host
+    method once had a flag of its own, ``--native``, from before the
+    methods had names; it is gone rather than carried, because nothing
+    outside this repository family has ever depended on it and a project
+    that is not public yet owes no backward compatibility.
+
+    The flag and variable *names* below are this implementation's and are
+    not in the decision log, which settles the ladder's shape and the
+    ``--server``/``--token`` rung only. They are one constant each,
+    exactly so that a decision can rename them.
+    """
+    from_flag = getattr(args, "method", None)
+    if from_flag:
+        return api.resolve_method(from_flag)
+    return api.resolve_method(env.get(METHOD_VAR))
+
+
+def _remote_server(args: argparse.Namespace, env: dict[str, str]) -> tuple[str | None, str | None]:
+    """Build server and token: flag, then variable, then nothing (E53).
+
+    The same two rungs as the method above, and the same missing third —
+    ``$XDG_CONFIG_HOME/mcuhome/`` is where E53 puts the last one, and what
+    a file there is called and contains is undecided. A ``remote`` build
+    with neither rung answered is refused by
+    :class:`~mcuhome.workbench.api.RemoteNotConfigured`, which
+    names both knobs, rather than defaulted to a server nobody chose.
+    """
+    server = getattr(args, "server", None) or env.get(SERVER_VAR) or None
+    token = getattr(args, "token", None) or env.get(TOKEN_VAR) or None
+    return server, token
+
+
+def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
+    """Run one build method and wait for it.
+
+    The one place the command line crosses the async boundary (E53's
+    lead-engineer note): the three build methods are awaitable because
+    ``remote`` drives a socket and the other two block for minutes, and a
+    command line owns its event loop, so it wraps the whole build in a
+    single :func:`asyncio.run` and its user sees no difference.
+    """
+    return asyncio.run(api.run_build(request, method=method))
+
+
 def _cmd_build(args: argparse.Namespace) -> int:
     as_json = getattr(args, "json", False)
+    method = _resolve_method(args, _process_env())
     model, out_dir = _build_input(args)
 
     # Host-side stage 4 runs for --generate-only (which stops after it) and
-    # for --native (which compiles the tree it produces). The default
-    # container path generates *inside* the build container from the device
-    # model the context carries (build-container-contract §6.1), so it
-    # writes no application on the host — the SDK does, out of reach of the
-    # private key.
-    if args.generate_only or args.native:
+    # for local-dev (which compiles the tree it produces). The two
+    # container-shaped methods generate *inside* the build container from
+    # the device model the context carries (build-container-contract §6.1),
+    # so they write no application on the host — the SDK does, out of reach
+    # of the private key.
+    if args.generate_only or method == api.LOCAL_DEV:
         # The configuration's file name comes out of the model rather than
         # out of the path this command was given: the generated files name
         # it in their header, and stage 4 has to be a function of the model
@@ -473,12 +558,12 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 return 0
             _print_commissioning(model)
             return 0
-        return _build_native(args, model, out_dir, generated=generated, as_json=as_json)
+        return _build_local_dev(args, model, out_dir, generated=generated, as_json=as_json)
 
-    return _build_local(args, model, out_dir, as_json=as_json)
+    return _build_delivered(args, model, out_dir, method=method, as_json=as_json)
 
 
-def _build_native(
+def _build_local_dev(
     args: argparse.Namespace,
     model: DeviceModel,
     out_dir: Path,
@@ -486,15 +571,20 @@ def _build_native(
     generated: list[str],
     as_json: bool,
 ) -> int:
-    """``--native``: compile on the host toolchain, unsigned, then host-sign (E56).
+    """``--method local-dev``: compile on the host, then host-sign (E56).
 
     The local-dev escape hatch (ADR 0007) for a contributor who already has
-    a west workspace. Since E56 it is not a special case: like the default
-    container path it produces an **unsigned** image plus the signing
-    parameters (in ``build-manifest.json``), and the private key never
-    reaches the west build — the bootloader gets the public half, and the
-    one shared host-side step (:func:`_apply_manifest_signature`) signs
+    a west workspace. Since E56 it is not a special case: like the two
+    container-shaped methods it produces an **unsigned** image plus the
+    signing parameters (in ``build-manifest.json``), and the private key
+    never reaches the west build — the bootloader gets the public half, and
+    the one shared host-side step (:func:`_sign_after_build`) signs
     afterwards. ``--no-sign`` skips that step, uniformly with every method.
+
+    The build itself goes through the one dispatch over the three methods
+    (:func:`mcuhome.workbench.api.run_build`), so what is left
+    here is what a command line owns: which key, which snippets, and how
+    to render the answer.
     """
     env = _process_env()
     out_dir = out_dir.resolve()
@@ -508,76 +598,61 @@ def _build_native(
     bootloader_key = _bootloader_public_key(key_path, key, out_dir)
     resolved_jobs = workspace.resolve_jobs(env=env, cli_jobs=args.jobs)
     bootloader_snippets = () if scheme is None else scheme.bootloader_snippets
-    # Absolute from here on: the build runs with the workspace top
-    # directory as its working directory (that is how west finds the
-    # manifest), so a relative --build-dir would land somewhere else
-    # entirely for anyone who invoked the builder from a subdirectory.
-    plan = workspace.plan_build(
-        out_dir=out_dir,
-        app_subdir=APP_DIR,
-        board=model.device.board,
-        snippets=snippets,
-        bootloader_snippets=bootloader_snippets,
-        signing_key=bootloader_key,
-        detached_signing=True,
-        jobs=resolved_jobs.value,
-        env=env,
-        # The library states neither of these for itself: `mcuhome` on a
-        # command line *is* the local-dev case (ADR 0020 decision E18), and
-        # a command line is the one caller entitled to say "where I am
-        # installed" and "where I was run".
-        module_dir=workspace.installed_module_dir(),
-        cwd=Path.cwd(),
+
+    def announce(plan: workspace.BuildPlan) -> None:
+        """Say what is about to run — after every pre-flight refusal, before it."""
+        if not as_json:
+            print()
+            print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
+            print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
+            print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
+            print(f"  {' '.join(plan.command)}")
+            print()
+        # The build log is written by a subprocess to the same terminal;
+        # flush so the header above it is not still sitting in this
+        # process's buffer.
+        sys.stdout.flush()
+
+    outcome = _run_method(
+        api.BuildRequest(
+            model=model,
+            # Absolute, because the build runs with the workspace top
+            # directory as its working directory (that is how west finds
+            # the manifest): a relative --build-dir would land somewhere
+            # else entirely for anyone who invoked mcuhome from a
+            # subdirectory.
+            out_dir=out_dir,
+            env=env,
+            jobs=resolved_jobs.value,
+            bootloader_key=bootloader_key,
+            snippets=snippets,
+            bootloader_snippets=bootloader_snippets,
+            # The library states neither of these for itself: `mcuhome` on
+            # a command line *is* the local-dev case (E18), and a command
+            # line is the one caller entitled to say "where I am installed"
+            # and "where I was run".
+            module_dir=workspace.installed_module_dir(),
+            started_in=Path.cwd(),
+            on_plan=announce,
+            # In --json mode the compiler's own output would break the
+            # document, so it goes to stderr — where a log belongs anyway,
+            # and where a caller redirecting stdout into a file still sees
+            # progress.
+            stream=sys.stderr if as_json else None,
+        ),
+        method=api.LOCAL_DEV,
     )
+    result = outcome.detail
+    plan, log = result.plan, result.log
+    images, merged = result.images, result.merged
+    manifest_path = result.manifest_path
 
-    if not as_json:
-        print()
-        print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
-        print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
-        print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
-        print(f"  {' '.join(plan.command)}")
-        print()
-    # The build log is written by a subprocess to the same terminal; flush
-    # so the header above it is not still sitting in this process's buffer.
-    sys.stdout.flush()
-
-    # In --json mode the compiler's own output would break the document,
-    # so it goes to stderr — where a log belongs anyway, and where a
-    # caller redirecting stdout into a file still sees progress.
-    code, log = workspace.run_build(plan, stream=sys.stderr if as_json else None)
-    if code != 0:
-        raise workspace.refuse_failed_build(code, build_dir=plan.build_dir)
-
-    # Every native build is unsigned now, so the unsigned lookalikes —
-    # sysbuild's combined hex, which falls back to the *unsigned* image, and
-    # any stale signed file from an earlier build of this directory — always
-    # go, before the host signing step produces the real ones.
-    _drop_unsigned_lookalikes(plan.build_dir, app_image=plan.app_dir.name)
-
-    images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
-    merged = workspace.merged_image(plan.build_dir)
-    manifest = report_module.build_manifest(
-        model,
-        out_dir=out_dir,
-        build_dir=plan.build_dir,
-        app_image=plan.app_dir.name,
-        images=images,
-        snippets=snippets,
-        bootloader_snippets=bootloader_snippets,
-        jobs=resolved_jobs.value,
-        signed_by_the_build=False,
-        merged=merged,
-        ota_image=None,
-    )
-    manifest_path = report_module.write_manifest(manifest, out_dir=out_dir)
-
-    # The one shared host-side signing step (E56), unless --no-sign. It
-    # reads the parameters back out of the manifest just written, signs, and
-    # folds the signature and the .ota back into it — the same code path
-    # `mcuhome sign` takes on a --native build directory.
+    # The one shared host-side signing step (E56), unless --no-sign.
     ota_image = None
     if not args.no_sign:
-        _, _, ota_image = _apply_manifest_signature(out_dir, key=args.signing_key, env=env)
+        ota_image = _sign_after_build(
+            model, out_dir, key=args.signing_key, env=env, report=outcome.report
+        ).ota
         # Re-read so the artifact list now includes the freshly signed image.
         images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
 
@@ -640,65 +715,88 @@ def _bootloader_public_key(key_path: Path, key: signing.SigningKey | None, out_d
     return public
 
 
-def _build_local(
-    args: argparse.Namespace, model: DeviceModel, out_dir: Path, *, as_json: bool
+def _build_delivered(
+    args: argparse.Namespace,
+    model: DeviceModel,
+    out_dir: Path,
+    *,
+    method: str,
+    as_json: bool,
 ) -> int:
-    """The default build (E54): compile in the container, then sign on the host.
+    """The two container-shaped methods: build elsewhere, sign on the host.
 
-    The container receives the device model and the **public** signing key
-    only, generates and compiles from them through the build-container ABI
-    (:func:`mcuhome.compiler.localbuild.run_local_build`), and delivers an
-    *unsigned* image plus the §7.2.1 build report. This command then signs
-    on the host, where the private key already is (ADR 0015 decision 8), so
-    ``mcuhome build`` still gets to one flashable image in one step while
-    the private key never goes near a container — the §9.2 violation the
-    old inline-signing container path carried. ``--no-sign`` stops at the
-    unsigned image for the detached-from-another-machine workflow.
+    ``local`` (the default, E54) and ``remote`` are one function because
+    from here they are one thing: a build environment receives the device
+    model and the **public** signing key, generates and compiles from them
+    through the build-container ABI, and *delivers* an unsigned image plus
+    the §7.2.1 build report. Whether that environment was a container this
+    machine started or one a build server started is
+    :func:`mcuhome.workbench.api.run_build`'s business, and it
+    answers both in one shape.
+
+    This command then signs on the host, where the private key already is
+    (ADR 0015 decision 8), so ``mcuhome build`` still gets to one flashable
+    image in one step while the private key never goes near a container or
+    a socket — the §9.2 violation the old inline-signing container path
+    carried. ``--no-sign`` stops at the unsigned image for the
+    detached-from-another-machine workflow.
     """
     env = _process_env()
     out_dir = out_dir.resolve()
     key_path, key = _resolve_build_key(args)
-    # Only the public half ever reaches the container. Derived from the
-    # private key on the signing path, taken verbatim from --public-key on
-    # the detached one — never the private half, on either.
+    # Only the public half ever reaches the build environment. Derived from
+    # the private key on the signing path, taken verbatim from --public-key
+    # on the detached one — never the private half, on either.
     signing_pub = _public_pem_for_context(key_path, key)
     resolved_jobs = workspace.resolve_jobs(env=env, cli_jobs=args.jobs)
-    reference = container.image_reference(env, override=args.image)
-    sdk_sources = _sdk_sources(args, env)
+    remote = method == api.REMOTE
+    reference = "" if remote else container.image_reference(env, override=args.image)
+    server, token = _remote_server(args, env)
 
     if not as_json:
         print()
-        print(f"Building {model.device.name} for {model.device.board} in the build container")
-        print(f"  image {reference}")
+        where = "on a build server" if remote else "in the build container"
+        print(f"Building {model.device.name} for {model.device.board} {where}")
+        if remote:
+            # Only when there is one: a run that is about to be refused for
+            # the lack of an address should not print "server None" first.
+            if server:
+                print(f"  server {server}")
+        else:
+            print(f"  image {reference}")
         print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
         print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
         print()
     sys.stdout.flush()
 
     def sink(line: str) -> None:
-        # The container log belongs on stderr in --json mode (where stdout
-        # is the document) and on the terminal otherwise.
+        # The build log belongs on stderr in --json mode (where stdout is
+        # the document) and on the terminal otherwise.
         print(line, file=sys.stderr if as_json else sys.stdout)
 
     # A hidden scratch area under the build directory: the context and the
-    # container's session tree live here and are rebuilt each run; the
-    # durable artifacts are copied up into out_dir below.
-    work_root = out_dir / ".mcuhome-local"
-    result = localbuild.run_local_build(
-        model,
-        signing_pub=signing_pub,
-        sdk_sources=sdk_sources,
-        work_root=work_root,
-        env=env,
-        image=reference,
-        jobs=resolved_jobs.value,
-        on_line=sink,
+    # session tree live here and are rebuilt each run; the durable
+    # artifacts are copied up into out_dir below.
+    outcome = _run_method(
+        api.BuildRequest(
+            model=model,
+            out_dir=out_dir,
+            env=env,
+            jobs=resolved_jobs.value,
+            signing_pub=signing_pub,
+            sdk_sources=_sdk_sources(args, env),
+            image=None if remote else reference,
+            server=server,
+            token=token,
+            on_line=sink,
+        ),
+        method=method,
     )
-    if not result.outcome.successful:
-        raise _local_build_failed(result.outcome)
+    if not outcome.successful:
+        raise _delivered_build_failed(outcome)
 
-    copied = _collect_local_artifacts(result, out_dir)
-    report = imgtool.read_build_report(out_dir / imgtool.BUILD_REPORT_FILE)
+    copied = _collect_delivered_artifacts(outcome, out_dir)
+    report = imgtool.read_build_report(out_dir / outcome.report)
 
     # Whatever an earlier build of this directory signed is (re)produced only
     # on the signing branch below; drop any stale signed image and .ota first
@@ -709,16 +807,10 @@ def _build_local(
     signed: list[Path] = []
     ota_image = None
     if not args.no_sign:
-        plan = imgtool.plan_report_signing(
-            out_dir,
-            key=key_path,
-            env=env,
-            topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
+        result = _sign_after_build(
+            model, out_dir, key=args.signing_key, env=env, report=outcome.report
         )
-        signed = imgtool.run_signing(plan)
-        signed_bin = next((path for path in signed if path.suffix == ".bin"), None)
-        if signed_bin is not None:
-            ota_image = _write_ota(model, out_dir=out_dir, signed=signed_bin)
+        signed, ota_image = result.signed, result.ota
 
     if as_json:
         _print_json(
@@ -726,7 +818,7 @@ def _build_local(
                 "ok": True,
                 "device": model.device.name,
                 "build_dir": str(out_dir),
-                "image": result.image,
+                "image": outcome.image,
                 "signed": not args.no_sign,
                 "artifacts": [{"role": role, "path": name} for role, name, _ in copied],
                 "signed_artifacts": [str(path) for path in signed],
@@ -759,7 +851,7 @@ def _sdk_sources(args: argparse.Namespace, env: dict[str, str]) -> tuple[Path, .
     operator-configured directories only (ADR 0018, contract v1's first
     tier). ``--sdk-source`` names one and repeats; ``MCUHOME_SDK_SOURCE``
     is a ``PATH``-style list of them. Order is preserved and duplicates
-    dropped. Irrelevant to ``--native``, which needs no SDK package.
+    dropped. Irrelevant to ``local-dev``, which needs no SDK package.
     """
     sources = [Path(entry).expanduser() for entry in (args.sdk_source or [])]
     from_env = env.get(SDK_SOURCE_VAR)
@@ -782,20 +874,22 @@ def _public_pem_for_context(key_path: Path, key: signing.SigningKey | None) -> s
     return key_path.read_text(encoding="utf-8")
 
 
-def _collect_local_artifacts(
-    result: localbuild.LocalBuildResult, out_dir: Path
+def _collect_delivered_artifacts(
+    outcome: api.BuildOutcome, out_dir: Path
 ) -> list[tuple[str, str, Path]]:
     """Copy the verified delivered artifacts up into *out_dir*.
 
-    The container delivers into a per-invocation directory that is wiped on
-    the next build; the durable copies a user flashes and signs belong in
-    the build directory itself. Only the artifacts egress actually verified
-    (:attr:`~mcuhome.compiler.localbackend.LocalOutcome.artifacts`) are
-    copied — nothing undeclared rides along.
+    A build environment delivers into a per-invocation directory that is
+    wiped on the next build; the durable copies a user flashes and signs
+    belong in the build directory itself. Only the artifacts the method
+    declared and verified (:attr:`…api.BuildOutcome.artifacts`)
+    are copied — nothing undeclared rides along, on either method.
     """
     copied: list[tuple[str, str, Path]] = []
-    for artifact in result.outcome.artifacts:
-        source = result.out_dir / artifact.path
+    if outcome.out_dir is None:
+        return copied
+    for artifact in outcome.artifacts:
+        source = outcome.out_dir / artifact.path
         destination = out_dir / artifact.path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
@@ -803,20 +897,28 @@ def _collect_local_artifacts(
     return copied
 
 
-def _local_build_failed(outcome: localbuild.lb.LocalOutcome) -> BuildError:
-    """A container build whose result was not a conforming deliverable.
+def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
+    """A build whose result was not a conforming deliverable.
 
-    Two voices speak here and both are quoted. ``outcome.problems`` is the
+    Two voices speak here and both are quoted. ``problems`` is the
     *backend's* judgement — which §5.3 condition failed. The result
-    document is the *program's* account of itself: ``reason``, the §5.4
-    error message and its details. A program that refuses before it runs
-    anything writes only that document and not a line of build log, so
-    dropping it here left "status 'failure'; exited 1" as the entire
-    diagnosis of a failure the program had explained precisely.
+    document (or, on the remote method, the verdict's error envelope) is
+    the *program's* account of itself: ``reason``, the §5.4 error message
+    and its details. A program that refuses before it runs anything writes
+    only that document and not a line of build log, so dropping it here
+    left "status 'failure'; exited 1" as the entire diagnosis of a failure
+    the program had explained precisely.
     """
-    problems = "; ".join(outcome.problems) or "the build container returned no usable result"
+    # The local method's detail wraps the backend outcome; the remote
+    # method's *is* the outcome. Both carry the same §5.4 vocabulary.
+    inner = getattr(outcome.detail, "outcome", outcome.detail)
+    problems = "; ".join(getattr(inner, "problems", ()) or ()) or (
+        f"the build reported {outcome.status!r} and no usable result"
+    )
     said = []
-    document = outcome.result or {}
+    document = getattr(inner, "result", None) or {}
+    if not document and getattr(inner, "error", None):
+        document = {"error": inner.error}
     error = document.get("error")
     error = error if isinstance(error, dict) else {}
     if document.get("reason"):
@@ -827,12 +929,15 @@ def _local_build_failed(outcome: localbuild.lb.LocalOutcome) -> BuildError:
     if details:
         said.append(json.dumps(details, sort_keys=True))
     account = f" The program said: {' — '.join(said)}" if said else ""
+    where = (
+        "on a build server" if outcome.method == api.REMOTE else "in the MCUHome build container"
+    )
     return BuildError(
         f"The firmware did not build: {problems}.{account}",
         hint=(
-            "the build ran in the MCUHome container through the build-container "
-            "ABI (ADR 0018). The container log above carries what west and the "
-            "compiler said; a --native build compiles on the host instead."
+            f"the build ran {where}, through the build-container ABI (ADR 0018). "
+            "The build log above carries what west and the compiler said; "
+            "--method local-dev compiles on the host instead."
         ),
     )
 
@@ -840,7 +945,7 @@ def _local_build_failed(outcome: localbuild.lb.LocalOutcome) -> BuildError:
 def _describe_report_region(region: dict) -> str:
     """One §7.2.1 ``memory`` entry, rendered like the linker's own table.
 
-    The same shape ``format_build_summary`` prints for a native build, from
+    The same shape ``format_build_summary`` prints for a ``local-dev`` build, from
     the report the container measured rather than a host build log this
     path never produced.
     """
@@ -905,27 +1010,57 @@ def _ota_note(image: ota.OtaImage) -> str:
     )
 
 
-def _drop_unsigned_lookalikes(build_dir: Path, *, app_image: str) -> None:
-    """Remove files a detached build must not leave behind.
+@dataclass(frozen=True)
+class _Signed:
+    """What the one host-side signing step produced."""
 
-    Two kinds, both named as though they were bootable and neither of
-    them signed: a ``zephyr.signed.*`` left over from an earlier inline
-    build of the same directory, and sysbuild's combined hex, which falls
-    back to the *unsigned* application when there is no signed one to
-    merge. Deleting them is not tidiness — it is the difference between
-    "no flashable file yet" and "a flashable file that bricks the boot",
-    and ``mcuhome sign`` is one command away from producing the real one.
+    #: The files imgtool wrote.
+    signed: list[Path]
+    #: The Matter OTA image wrapped around the freshly signed binary, or
+    #: None for a device that cannot be updated over the air.
+    ota: ota.OtaImage | None
+    #: The updated ``build-manifest.json`` content, on the shape that has
+    #: one to fold a signature back into.
+    manifest: dict | None
+
+
+def _sign_after_build(
+    model: DeviceModel, out_dir: Path, *, key: Path | None, env: dict[str, str], report: str
+) -> _Signed:
+    """The one host-side signing step, for every build method (E56).
+
+    Every method delivers an **unsigned** image, and exactly one place
+    turns it into a flashable one — this function. ``local-dev``,
+    ``local`` and ``remote`` all reach it with the same four arguments,
+    and the private key enters the story here and nowhere earlier, which
+    is what makes "the signing key never reaches the thing that builds" a
+    property of the code rather than of three code paths agreeing.
+
+    *report* is :attr:`…api.BuildOutcome.report`: the two report
+    shapes E55 says must both be read. A ``build-manifest.json`` is a host
+    build's, and its signature and ``.ota`` are folded back into it; a
+    §7.2.1 ``build-report.json`` is a delivery from a build environment,
+    which has no manifest to fold anything into, so the ``.ota`` is
+    written from the device model this command still holds. Which one
+    applies is decided by what the build said it wrote — never by looking
+    around the directory, which is how ``mcuhome sign`` has to do it (see
+    :func:`_target_is_build_report`) because it arrives without a build.
     """
-    output = build_dir / app_image / "zephyr"
-    for name in (
-        "zephyr.signed.bin",
-        "zephyr.signed.hex",
-        "zephyr.signed.confirmed.bin",
-        "zephyr.signed.confirmed.hex",
-    ):
-        (output / name).unlink(missing_ok=True)
-    for merged in build_dir.glob(workspace.MERGED_IMAGE_GLOB):
-        merged.unlink(missing_ok=True)
+    if report == manifest_module.MANIFEST_FILE:
+        plan, data, ota_image = _apply_manifest_signature(out_dir, key=key, env=env)
+        return _Signed(signed=list(plan.outputs), ota=ota_image, manifest=data)
+    plan = imgtool.sign_report(
+        out_dir,
+        key=key,
+        env=env,
+        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
+    )
+    signed = list(plan.outputs)
+    signed_bin = next((path for path in signed if path.suffix == ".bin"), None)
+    ota_image = (
+        None if signed_bin is None else _write_ota(model, out_dir=out_dir, signed=signed_bin)
+    )
+    return _Signed(signed=signed, ota=ota_image, manifest=None)
 
 
 def _drop_signed_lookalikes(out_dir: Path) -> None:
@@ -940,8 +1075,8 @@ def _drop_signed_lookalikes(out_dir: Path) -> None:
     no build now here and that the summary does not mention. Dropping them
     before the signing branch means that branch is the only thing that ever
     creates them, so what a build leaves behind is always what that build
-    produced — the promise the ``--native`` path keeps through
-    :func:`_drop_unsigned_lookalikes`. The signed names come from
+    produced — the promise the ``local-dev`` path keeps through
+    :func:`mcuhome.compiler.devbuild.drop_unsigned_lookalikes`. The signed names come from
     :data:`imgtool.REPORT_FIRMWARE`, so this and the signer cannot disagree
     about what a signed image is called.
     """
@@ -1059,9 +1194,9 @@ def _apply_manifest_signature(
     """Sign a build-manifest build and fold the signature and .ota back in.
 
     The one host-side signing step for a build described by
-    ``build-manifest.json`` — the ``--native`` build's report shape. Shared
+    ``build-manifest.json`` — the ``local-dev`` build's report shape. Shared
     (E56) by ``mcuhome sign`` on such a directory and by ``mcuhome build``
-    right after ``--native`` compiles an **unsigned** image: neither build
+    right after ``local-dev`` compiles an **unsigned** image: neither build
     signs itself, and this is the single place a private key turns an
     unsigned image into a flashable one. The .ota wraps the image that was
     just signed, and the manifest records both — all from the manifest's
@@ -1091,7 +1226,7 @@ def _apply_manifest_signature(
 def _cmd_sign(args: argparse.Namespace) -> int:
     target = Path(args.target)
     # One verb, two report shapes, chosen by which file the directory
-    # holds. A --native build dir carries build-manifest.json (the manifest
+    # holds. A local-dev build dir carries build-manifest.json (the manifest
     # path below); a container build dir carries the leaner §7.2.1
     # build-report.json (the local backend's delivery), which has no
     # manifest to fold a signature back into and no OTA parameters to wrap.
@@ -1128,7 +1263,7 @@ def _cmd_sign(args: argparse.Namespace) -> int:
 def _target_is_build_report(target: Path) -> bool:
     """Whether *target* is a §7.2.1 build-report directory, not a manifest one.
 
-    A build-manifest.json — the ``--native`` shape — wins when both are
+    A build-manifest.json — the ``local-dev`` shape — wins when both are
     present, so a directory that ever carried a manifest keeps its richer
     path (signatures folded back, OTA written). A directory holding only
     build-report.json is the container backend's delivery, and the report
@@ -1368,18 +1503,30 @@ def build_parser() -> argparse.ArgumentParser:
             "(repeatable); the debug-rtt log transport is always already among them"
         ),
     )
-    # ADR 0007: the builder container is the build environment, --native
-    # is the escape hatch. This is the flag whose default flipped when the
-    # image landed (phase 2 block D); nothing else about the surface did.
+    # ADR 0020 decision 6 / E18: three build methods behind one interface.
+    # The name selects a method, not a code path.
     build_parser_.add_argument(
-        "--native",
-        action=argparse.BooleanOptionalAction,
-        default=False,
+        "--method",
+        metavar="NAME",
+        default=None,
         help=(
-            "compile on this machine, in the west workspace MCUHome is installed "
-            "in, instead of in the builder container (needs a Zephyr toolchain, "
-            "gn and zap on the host)"
+            "which build method compiles this device: "
+            + ", ".join(api.METHODS)
+            + f" (default: {api.DEFAULT_METHOD}, the build container on this "
+            f"machine; {METHOD_VAR} sets it too)"
         ),
+    )
+    build_parser_.add_argument(
+        "--server",
+        metavar="URL",
+        default=None,
+        help=(f"build server the {api.REMOTE} method talks to ({SERVER_VAR} sets it too)"),
+    )
+    build_parser_.add_argument(
+        "--token",
+        metavar="TOKEN",
+        default=None,
+        help=f"bearer token for that build server ({TOKEN_VAR} sets it too)",
     )
     build_parser_.add_argument(
         "--image",
@@ -1398,7 +1545,7 @@ def build_parser() -> argparse.ArgumentParser:
             "directory holding the hash-pinned MCUHome SDK package the build "
             "container fetches (repeatable; searched in order). The default "
             f"container build needs one; {SDK_SOURCE_VAR} is a PATH-style list of "
-            "them, and --native needs none"
+            f"them, and --method {api.LOCAL_DEV} needs none"
         ),
     )
     build_parser_.add_argument(
