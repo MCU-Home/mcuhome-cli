@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from mcuhome.compiler import container
+from mcuhome.compiler import localbackend as lb
 
 TESTS_DIR = Path(__file__).resolve().parent
 DATA_DIR = TESTS_DIR / "data"
@@ -72,13 +73,20 @@ def _no_docker(monkeypatch):
     """Nothing in this suite is allowed to reach a container runtime.
 
     A safety net, not a convenience: ``mcuhome build`` defaults to the
-    container, so a test that forgets to stub stage 5 would otherwise
-    quietly start a real Matter build on the machine running pytest.
-    Tests that want a working preflight replace this with their own
-    runner, which wins because their monkeypatch is applied later.
+    container (through the build-container ABI since E54), so a test that
+    forgets to stub it would otherwise quietly start a real Matter build on
+    the machine running pytest. Both container seams are closed — the older
+    ``--native`` preflight helper and the local backend's one impure
+    docker call — so neither path can escape. Tests that want a working
+    build replace these with their own stub, which wins because their
+    monkeypatch is applied later.
     """
 
     def refuse(command, env):
         raise AssertionError(f"a test tried to run {command[0]!r}: stage 5 must be stubbed")
 
+    def refuse_docker(argv, on_line=None):
+        raise AssertionError(f"a test tried to run docker {argv!r}: the seam must be stubbed")
+
     monkeypatch.setattr(container, "_run_quiet", refuse)
+    monkeypatch.setattr(lb, "_run_command", refuse_docker)

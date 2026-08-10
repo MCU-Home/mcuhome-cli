@@ -61,10 +61,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 from pathlib import Path
 
-from mcuhome.compiler import container, workspace
+from mcuhome.compiler import container, localbuild, workspace
 from mcuhome.compiler import report as report_module
 from mcuhome.compiler.generate import APP_DIR, write_tree
 from mcuhome.model import __version__, export, ota, pairing, registry
@@ -88,6 +89,10 @@ __all__ = [
 #: A sibling of ``devices/``, never inside it — build output must not turn
 #: up in the user's config diffs (builder-pipeline.md §2).
 BUILD_DIR = "build"
+
+#: ``PATH``-style environment variable naming SDK source directories for
+#: the default (container) build path. ``--sdk-source`` beats it.
+SDK_SOURCE_VAR = "MCUHOME_SDK_SOURCE"
 
 
 def _process_env() -> dict[str, str]:
@@ -436,77 +441,98 @@ def _cmd_build(args: argparse.Namespace) -> int:
     as_json = getattr(args, "json", False)
     model, out_dir = _build_input(args)
 
-    # The configuration's file name comes out of the model rather than out
-    # of the path this command was given: the generated files name it in
-    # their header, and stage 4 has to be a function of the model alone or
-    # a --model build could not reproduce a direct build byte for byte.
-    written = write_tree(model, out_dir=out_dir, config_name=model.device.source)
-    generated = [str(path.relative_to(out_dir)) for path in written]
-
-    if not as_json:
-        print(f"Generated {len(written)} files for {model.device.name} in {out_dir}:")
-        for name in generated:
-            print(f"  {name}")
-
-    if args.generate_only:
-        if as_json:
-            _print_json(
-                {
-                    "ok": True,
-                    "device": model.device.name,
-                    "build_dir": str(out_dir),
-                    "generated": generated,
-                    "manifest": None,
-                }
-            )
+    # Host-side stage 4 runs for --generate-only (which stops after it) and
+    # for --native (which compiles the tree it produces). The default
+    # container path generates *inside* the build container from the device
+    # model the context carries (build-container-contract §6.1), so it
+    # writes no application on the host — the SDK does, out of reach of the
+    # private key.
+    if args.generate_only or args.native:
+        # The configuration's file name comes out of the model rather than
+        # out of the path this command was given: the generated files name
+        # it in their header, and stage 4 has to be a function of the model
+        # alone or a --model build could not reproduce a direct build byte
+        # for byte.
+        written = write_tree(model, out_dir=out_dir, config_name=model.device.source)
+        generated = [str(path.relative_to(out_dir)) for path in written]
+        if not as_json:
+            print(f"Generated {len(written)} files for {model.device.name} in {out_dir}:")
+            for name in generated:
+                print(f"  {name}")
+        if args.generate_only:
+            if as_json:
+                _print_json(
+                    {
+                        "ok": True,
+                        "device": model.device.name,
+                        "build_dir": str(out_dir),
+                        "generated": generated,
+                        "manifest": None,
+                    }
+                )
+                return 0
+            _print_commissioning(model)
             return 0
-        _print_commissioning(model)
-        return 0
+        return _build_native(args, model, out_dir, generated=generated, as_json=as_json)
 
+    return _build_local(args, model, out_dir, as_json=as_json)
+
+
+def _build_native(
+    args: argparse.Namespace,
+    model: DeviceModel,
+    out_dir: Path,
+    *,
+    generated: list[str],
+    as_json: bool,
+) -> int:
+    """``--native``: compile on the host toolchain, unsigned, then host-sign (E56).
+
+    The local-dev escape hatch (ADR 0007) for a contributor who already has
+    a west workspace. Since E56 it is not a special case: like the default
+    container path it produces an **unsigned** image plus the signing
+    parameters (in ``build-manifest.json``), and the private key never
+    reaches the west build — the bootloader gets the public half, and the
+    one shared host-side step (:func:`_apply_manifest_signature`) signs
+    afterwards. ``--no-sign`` skips that step, uniformly with every method.
+    """
+    env = _process_env()
+    out_dir = out_dir.resolve()
     snippets = _snippets_for(model, args.snippet)
     scheme = _update_scheme_of(model)
     key_path, key = _resolve_build_key(args)
-    # The single resolution point (workspace.resolve_jobs): --jobs beats
-    # MCUHOME_JOBS beats auto-detection. Resolved once, here, on the host —
-    # the container path needs the same number for its own docker run, not
-    # a second guess made from inside the container.
-    resolved_jobs = workspace.resolve_jobs(env=_process_env(), cli_jobs=args.jobs)
+    # E56: no build signs inline, so the west build gets the PUBLIC key for
+    # the bootloader and nothing more — the private key stays for the host
+    # signing step below, exactly as the container path keeps it off the
+    # container.
+    bootloader_key = _bootloader_public_key(key_path, key, out_dir)
+    resolved_jobs = workspace.resolve_jobs(env=env, cli_jobs=args.jobs)
     bootloader_snippets = () if scheme is None else scheme.bootloader_snippets
     # Absolute from here on: the build runs with the workspace top
     # directory as its working directory (that is how west finds the
     # manifest), so a relative --build-dir would land somewhere else
-    # entirely for anyone who invoked the builder from a subdirectory —
-    # and the container mounts host paths, which have to be real.
-    common = {
-        "out_dir": out_dir.resolve(),
-        "app_subdir": APP_DIR,
-        "board": model.device.board,
-        "snippets": snippets,
-        "bootloader_snippets": bootloader_snippets,
-        "signing_key": key_path,
-        "detached_signing": args.no_sign,
-        "jobs": resolved_jobs.value,
-        "env": _process_env(),
-        # Both paths look for the west workspace at the MCUHome module
-        # first and here second. The library states neither for itself:
-        # `mcuhome` on a command line *is* the local-dev case (ADR 0020
-        # decision E18), and a command line is the one caller entitled to
-        # say "where I am installed" and "where I was run".
-        "module_dir": workspace.installed_module_dir(),
-        "cwd": Path.cwd(),
-    }
-    # ADR 0007: the container is the build environment, --native is the
-    # escape hatch for a contributor who already has a west workspace.
-    if args.native:
-        plan = workspace.plan_build(**common)
-    else:
-        plan = container.plan_build(**common, image=args.image)
+    # entirely for anyone who invoked the builder from a subdirectory.
+    plan = workspace.plan_build(
+        out_dir=out_dir,
+        app_subdir=APP_DIR,
+        board=model.device.board,
+        snippets=snippets,
+        bootloader_snippets=bootloader_snippets,
+        signing_key=bootloader_key,
+        detached_signing=True,
+        jobs=resolved_jobs.value,
+        env=env,
+        # The library states neither of these for itself: `mcuhome` on a
+        # command line *is* the local-dev case (ADR 0020 decision E18), and
+        # a command line is the one caller entitled to say "where I am
+        # installed" and "where I was run".
+        module_dir=workspace.installed_module_dir(),
+        cwd=Path.cwd(),
+    )
 
     if not as_json:
         print()
         print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
-        if plan.image:
-            print(f"  in {plan.image}")
         print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
         print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
         print(f"  {' '.join(plan.command)}")
@@ -522,36 +548,38 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if code != 0:
         raise workspace.refuse_failed_build(code, build_dir=plan.build_dir)
 
-    if args.no_sign:
-        _drop_unsigned_lookalikes(plan.build_dir, app_image=plan.app_dir.name)
+    # Every native build is unsigned now, so the unsigned lookalikes —
+    # sysbuild's combined hex, which falls back to the *unsigned* image, and
+    # any stale signed file from an earlier build of this directory — always
+    # go, before the host signing step produces the real ones.
+    _drop_unsigned_lookalikes(plan.build_dir, app_image=plan.app_dir.name)
 
     images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
     merged = workspace.merged_image(plan.build_dir)
-    # The .ota wraps the SIGNED image, so a --no-sign build has nothing to
-    # wrap yet: mcuhome sign writes it afterwards, where the key is
-    # (ADR 0015 decision 8). The manifest states the OTA parameters either
-    # way, which is what lets that second machine do it at all.
-    ota_image = None
-    if not args.no_sign:
-        ota_image = _write_ota(
-            model,
-            out_dir=out_dir.resolve(),
-            signed=plan.build_dir / plan.app_dir.name / "zephyr" / "zephyr.signed.bin",
-        )
     manifest = report_module.build_manifest(
         model,
-        out_dir=out_dir.resolve(),
+        out_dir=out_dir,
         build_dir=plan.build_dir,
         app_image=plan.app_dir.name,
         images=images,
         snippets=snippets,
         bootloader_snippets=bootloader_snippets,
         jobs=resolved_jobs.value,
-        signed_by_the_build=not args.no_sign,
+        signed_by_the_build=False,
         merged=merged,
-        ota_image=ota_image,
+        ota_image=None,
     )
-    manifest_path = report_module.write_manifest(manifest, out_dir=out_dir.resolve())
+    manifest_path = report_module.write_manifest(manifest, out_dir=out_dir)
+
+    # The one shared host-side signing step (E56), unless --no-sign. It
+    # reads the parameters back out of the manifest just written, signs, and
+    # folds the signature and the .ota back into it — the same code path
+    # `mcuhome sign` takes on a --native build directory.
+    ota_image = None
+    if not args.no_sign:
+        _, _, ota_image = _apply_manifest_signature(out_dir, key=args.signing_key, env=env)
+        # Re-read so the artifact list now includes the freshly signed image.
+        images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
 
     if as_json:
         _print_json(
@@ -561,7 +589,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
                 "build_dir": str(out_dir),
                 "generated": generated,
                 "manifest_path": str(manifest_path),
-                "manifest": manifest.to_dict(),
+                "manifest": manifest_module.read_manifest(Path(manifest_path)),
             }
         )
         return 0
@@ -590,6 +618,239 @@ def _cmd_build(args: argparse.Namespace) -> int:
         print(_detached_next_step(out_dir))
     _print_commissioning(model)
     return 0
+
+
+def _bootloader_public_key(key_path: Path, key: signing.SigningKey | None, out_dir: Path) -> Path:
+    """The PUBLIC key file west compiles into the bootloader (E56).
+
+    Every build is unsigned now, so west never receives the private key —
+    it gets the public half, which is all MCUboot needs and is useless for
+    signing. With ``--no-sign`` the user already wrote that file out
+    (``--public-key``); otherwise it is derived from the private key into
+    the build directory, where the host signing step then uses the private
+    half.
+    """
+    if key is None:
+        return key_path
+    public = out_dir / ".mcuhome-signing.pub"
+    public.parent.mkdir(parents=True, exist_ok=True)
+    public.write_text(
+        signing.public_key_pem(key_path.read_text(encoding="utf-8")), encoding="utf-8"
+    )
+    return public
+
+
+def _build_local(
+    args: argparse.Namespace, model: DeviceModel, out_dir: Path, *, as_json: bool
+) -> int:
+    """The default build (E54): compile in the container, then sign on the host.
+
+    The container receives the device model and the **public** signing key
+    only, generates and compiles from them through the build-container ABI
+    (:func:`mcuhome.compiler.localbuild.run_local_build`), and delivers an
+    *unsigned* image plus the §7.2.1 build report. This command then signs
+    on the host, where the private key already is (ADR 0015 decision 8), so
+    ``mcuhome build`` still gets to one flashable image in one step while
+    the private key never goes near a container — the §9.2 violation the
+    old inline-signing container path carried. ``--no-sign`` stops at the
+    unsigned image for the detached-from-another-machine workflow.
+    """
+    env = _process_env()
+    out_dir = out_dir.resolve()
+    key_path, key = _resolve_build_key(args)
+    # Only the public half ever reaches the container. Derived from the
+    # private key on the signing path, taken verbatim from --public-key on
+    # the detached one — never the private half, on either.
+    signing_pub = _public_pem_for_context(key_path, key)
+    resolved_jobs = workspace.resolve_jobs(env=env, cli_jobs=args.jobs)
+    reference = container.image_reference(env, override=args.image)
+    sdk_sources = _sdk_sources(args, env)
+
+    if not as_json:
+        print()
+        print(f"Building {model.device.name} for {model.device.board} in the build container")
+        print(f"  image {reference}")
+        print(f"  jobs {resolved_jobs.value} ({resolved_jobs.source})")
+        print(_signing_key_note(key) if key is not None else _detached_key_note(key_path))
+        print()
+    sys.stdout.flush()
+
+    def sink(line: str) -> None:
+        # The container log belongs on stderr in --json mode (where stdout
+        # is the document) and on the terminal otherwise.
+        print(line, file=sys.stderr if as_json else sys.stdout)
+
+    # A hidden scratch area under the build directory: the context and the
+    # container's session tree live here and are rebuilt each run; the
+    # durable artifacts are copied up into out_dir below.
+    work_root = out_dir / ".mcuhome-local"
+    result = localbuild.run_local_build(
+        model,
+        signing_pub=signing_pub,
+        sdk_sources=sdk_sources,
+        work_root=work_root,
+        env=env,
+        image=reference,
+        jobs=resolved_jobs.value,
+        on_line=sink,
+    )
+    if not result.outcome.successful:
+        raise _local_build_failed(result.outcome)
+
+    copied = _collect_local_artifacts(result, out_dir)
+    report = imgtool.read_build_report(out_dir / imgtool.BUILD_REPORT_FILE)
+
+    # Whatever an earlier build of this directory signed is (re)produced only
+    # on the signing branch below; drop any stale signed image and .ota first
+    # so a --no-sign run cannot leave a flashable lookalike beside the fresh
+    # unsigned firmware.
+    _drop_signed_lookalikes(out_dir)
+
+    signed: list[Path] = []
+    ota_image = None
+    if not args.no_sign:
+        plan = imgtool.plan_report_signing(
+            out_dir,
+            key=key_path,
+            env=env,
+            topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
+        )
+        signed = imgtool.run_signing(plan)
+        signed_bin = next((path for path in signed if path.suffix == ".bin"), None)
+        if signed_bin is not None:
+            ota_image = _write_ota(model, out_dir=out_dir, signed=signed_bin)
+
+    if as_json:
+        _print_json(
+            {
+                "ok": True,
+                "device": model.device.name,
+                "build_dir": str(out_dir),
+                "image": result.image,
+                "signed": not args.no_sign,
+                "artifacts": [{"role": role, "path": name} for role, name, _ in copied],
+                "signed_artifacts": [str(path) for path in signed],
+                "report": report,
+                "ota": None if ota_image is None else str(ota_image.path),
+            }
+        )
+        return 0
+
+    print()
+    print(_format_local_summary(model.device.name, copied, signed, report))
+    if ota_image is not None:
+        print()
+        print(_ota_note(ota_image))
+    layout = format_flash_layout(model.device.board)
+    if layout:
+        print()
+        print(layout)
+    if args.no_sign:
+        print()
+        print(_detached_next_step(out_dir))
+    _print_commissioning(model)
+    return 0
+
+
+def _sdk_sources(args: argparse.Namespace, env: dict[str, str]) -> tuple[Path, ...]:
+    """SDK source directories: ``--sdk-source`` (repeatable) then the variable.
+
+    The local build fetches the MCUHome SDK as a hash-pinned package from
+    operator-configured directories only (ADR 0018, contract v1's first
+    tier). ``--sdk-source`` names one and repeats; ``MCUHOME_SDK_SOURCE``
+    is a ``PATH``-style list of them. Order is preserved and duplicates
+    dropped. Irrelevant to ``--native``, which needs no SDK package.
+    """
+    sources = [Path(entry).expanduser() for entry in (args.sdk_source or [])]
+    from_env = env.get(SDK_SOURCE_VAR)
+    if from_env:
+        sources += [Path(entry).expanduser() for entry in from_env.split(os.pathsep) if entry]
+    return tuple(dict.fromkeys(sources))
+
+
+def _public_pem_for_context(key_path: Path, key: signing.SigningKey | None) -> str:
+    """The **public** key PEM that goes into the context — never the private half.
+
+    On the signing path *key* is the resolved private key, and the public
+    half is derived from it; with ``--no-sign`` *key* is None and *key_path*
+    already points at the public key the user wrote out. Either way what
+    leaves this function is a public key, which is all a build container may
+    ever hold (ADR 0015 decision 8).
+    """
+    if key is not None:
+        return signing.public_key_pem(key_path.read_text(encoding="utf-8"))
+    return key_path.read_text(encoding="utf-8")
+
+
+def _collect_local_artifacts(
+    result: localbuild.LocalBuildResult, out_dir: Path
+) -> list[tuple[str, str, Path]]:
+    """Copy the verified delivered artifacts up into *out_dir*.
+
+    The container delivers into a per-invocation directory that is wiped on
+    the next build; the durable copies a user flashes and signs belong in
+    the build directory itself. Only the artifacts egress actually verified
+    (:attr:`~mcuhome.compiler.localbackend.LocalOutcome.artifacts`) are
+    copied — nothing undeclared rides along.
+    """
+    copied: list[tuple[str, str, Path]] = []
+    for artifact in result.outcome.artifacts:
+        source = result.out_dir / artifact.path
+        destination = out_dir / artifact.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        copied.append((artifact.role, artifact.path, destination))
+    return copied
+
+
+def _local_build_failed(outcome: localbuild.lb.LocalOutcome) -> BuildError:
+    """A container build whose result was not a conforming deliverable."""
+    problems = "; ".join(outcome.problems) or "the build container returned no usable result"
+    return BuildError(
+        f"The firmware did not build: {problems}.",
+        hint=(
+            "the build ran in the MCUHome container through the build-container "
+            "ABI (ADR 0018). The container log above carries what west and the "
+            "compiler said; a --native build compiles on the host instead."
+        ),
+    )
+
+
+def _describe_report_region(region: dict) -> str:
+    """One §7.2.1 ``memory`` entry, rendered like the linker's own table.
+
+    The same shape ``format_build_summary`` prints for a native build, from
+    the report the container measured rather than a host build log this
+    path never produced.
+    """
+    used = float(region.get("used", 0)) / 1024
+    total = float(region.get("total", 0)) / 1024
+    percent = float(region.get("percent", 0.0))
+    return f"{region.get('region')} {used:.1f} KiB of {total:.1f} KiB ({percent:.1f}%)"
+
+
+def _format_local_summary(
+    name: str,
+    copied: list[tuple[str, str, Path]],
+    signed: list[Path],
+    report: dict,
+) -> str:
+    """What the container delivered, what the host signed, and the footprint."""
+    lines = [f"Built {name}."]
+    lines.append("")
+    lines.append("Artifacts")
+    for role, _, destination in copied:
+        lines.append(f"  {destination}  ({role})")
+    for path in signed:
+        lines.append(f"  {path}  (signed)")
+    memory = report.get("memory")
+    if isinstance(memory, list) and memory:
+        lines.append("")
+        lines.append("Memory")
+        for region in memory:
+            if isinstance(region, dict):
+                lines.append(f"  {region.get('image')}: {_describe_report_region(region)}")
+    return "\n".join(lines)
 
 
 def _write_ota(model: DeviceModel, *, out_dir: Path, signed: Path) -> ota.OtaImage | None:
@@ -644,6 +905,29 @@ def _drop_unsigned_lookalikes(build_dir: Path, *, app_image: str) -> None:
         (output / name).unlink(missing_ok=True)
     for merged in build_dir.glob(workspace.MERGED_IMAGE_GLOB):
         merged.unlink(missing_ok=True)
+
+
+def _drop_signed_lookalikes(out_dir: Path) -> None:
+    """Remove signed firmware and OTA files an earlier build of this dir left.
+
+    The local path copies the container's UNSIGNED firmware into the
+    persistent *out_dir* and signs on the host only afterwards. A ``--no-sign``
+    run — or a repeat build — writes no signed image, but a
+    ``firmware.signed.*`` and a matching ``*.ota`` from an earlier signed
+    build of the same directory would otherwise survive next to the fresh
+    unsigned firmware: a flashable, boot-bricking lookalike that belongs to
+    no build now here and that the summary does not mention. Dropping them
+    before the signing branch means that branch is the only thing that ever
+    creates them, so what a build leaves behind is always what that build
+    produced — the promise the ``--native`` path keeps through
+    :func:`_drop_unsigned_lookalikes`. The signed names come from
+    :data:`imgtool.REPORT_FIRMWARE`, so this and the signer cannot disagree
+    about what a signed image is called.
+    """
+    for _source_name, signed_name in imgtool.REPORT_FIRMWARE:
+        (out_dir / signed_name).unlink(missing_ok=True)
+    for ota_path in out_dir.glob("*.ota"):
+        ota_path.unlink(missing_ok=True)
 
 
 def _detached_next_step(out_dir: Path) -> str:
@@ -748,11 +1032,25 @@ def _cmd_new(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_sign(args: argparse.Namespace) -> int:
+def _apply_manifest_signature(
+    target: Path, *, key: Path | None, env: dict[str, str]
+) -> tuple[imgtool.SignPlan, dict, ota.OtaImage | None]:
+    """Sign a build-manifest build and fold the signature and .ota back in.
+
+    The one host-side signing step for a build described by
+    ``build-manifest.json`` — the ``--native`` build's report shape. Shared
+    (E56) by ``mcuhome sign`` on such a directory and by ``mcuhome build``
+    right after ``--native`` compiles an **unsigned** image: neither build
+    signs itself, and this is the single place a private key turns an
+    unsigned image into a flashable one. The .ota wraps the image that was
+    just signed, and the manifest records both — all from the manifest's
+    own parameters, so the machine that runs this needs neither the device
+    configuration nor the Matter SDK.
+    """
     plan = imgtool.sign_build(
-        Path(args.target),
-        key=args.signing_key,
-        env=_process_env(),
+        target,
+        key=key,
+        env=env,
         # Where MCUboot's own imgtool would be, if this machine happens to
         # be a west workspace. It usually is not: signing runs where the
         # key is (ADR 0015 decision 8), and imgtool.sign_build no longer
@@ -760,18 +1058,27 @@ def _cmd_sign(args: argparse.Namespace) -> int:
         topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
     )
     data = manifest_module.record_signature(
-        manifest_module.read_manifest(plan.manifest_path),
-        out_dir=plan.out_dir,
-        files=plan.outputs,
+        manifest_module.read_manifest(plan.manifest_path), out_dir=plan.out_dir, files=plan.outputs
     )
-    # Now, and not during the build: the .ota wraps the signed image, and
-    # until this command ran there was none (ADR 0015 decision 8). The
-    # parameters come out of the manifest, so this machine needs neither
-    # the device configuration nor the Matter SDK.
     ota_image = _sign_ota(data, out_dir=plan.out_dir, outputs=plan.outputs)
     if ota_image is not None:
         manifest_module.record_ota(data, ota_image, out_dir=plan.out_dir)
     manifest_module.dump_manifest(data, out_dir=plan.out_dir)
+    return plan, data, ota_image
+
+
+def _cmd_sign(args: argparse.Namespace) -> int:
+    target = Path(args.target)
+    # One verb, two report shapes, chosen by which file the directory
+    # holds. A --native build dir carries build-manifest.json (the manifest
+    # path below); a container build dir carries the leaner §7.2.1
+    # build-report.json (the local backend's delivery), which has no
+    # manifest to fold a signature back into and no OTA parameters to wrap.
+    if _target_is_build_report(target):
+        return _cmd_sign_report(args, target)
+    plan, data, ota_image = _apply_manifest_signature(
+        target, key=args.signing_key, env=_process_env()
+    )
     print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
     for path in plan.outputs:
         print(f"  {path}")
@@ -794,6 +1101,52 @@ def _cmd_sign(args: argparse.Namespace) -> int:
             "application. Install the\nbootloader and the signed application above "
             "separately, or build with signing on."
         )
+    return 0
+
+
+def _target_is_build_report(target: Path) -> bool:
+    """Whether *target* is a §7.2.1 build-report directory, not a manifest one.
+
+    A build-manifest.json — the ``--native`` shape — wins when both are
+    present, so a directory that ever carried a manifest keeps its richer
+    path (signatures folded back, OTA written). A directory holding only
+    build-report.json is the container backend's delivery, and the report
+    file named directly is unambiguous.
+    """
+    if target.is_file():
+        return target.name == imgtool.BUILD_REPORT_FILE
+    if (target / manifest_module.MANIFEST_FILE).is_file():
+        return False
+    return (target / imgtool.BUILD_REPORT_FILE).is_file()
+
+
+def _cmd_sign_report(args: argparse.Namespace, target: Path) -> int:
+    """Sign the firmware a container build delivered, from its §7.2.1 report.
+
+    The detached-signing tail of the default build path: the report carries
+    the imgtool parameters and the unsigned ``firmware.*`` sit beside it, so
+    a machine that has only the delivery and the private key produces the
+    flashable images. There is no manifest to record the signature in and
+    no OTA block to wrap — those belong to ``mcuhome build``, which does
+    both in one step, or to the machine that holds the device model.
+    """
+    plan = imgtool.sign_report(
+        target,
+        key=args.signing_key,
+        env=_process_env(),
+        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
+    )
+    print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
+    for path in plan.outputs:
+        print(f"  {path}")
+    print()
+    print(
+        f"imgtool sign --version {plan.parameters.version} "
+        f"--header-size {plan.parameters.header_size} "
+        f"--slot-size {plan.parameters.slot_size} --align {plan.parameters.align}\n"
+        "  — the parameters the build report states, which are the ones the build "
+        "container linked\n    the image for."
+    )
     return 0
 
 
@@ -1014,6 +1367,17 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             f"builder image to compile in (default: {container.IMAGE}; the "
             f"{container.IMAGE_VAR} environment variable sets it too)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--sdk-source",
+        action="append",
+        metavar="DIR",
+        help=(
+            "directory holding the hash-pinned MCUHome SDK package the build "
+            "container fetches (repeatable; searched in order). The default "
+            f"container build needs one; {SDK_SOURCE_VAR} is a PATH-style list of "
+            "them, and --native needs none"
         ),
     )
     build_parser_.add_argument(

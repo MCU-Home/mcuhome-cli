@@ -5,21 +5,103 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+import os
 from pathlib import Path
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
-from mcuhome.compiler import container, workspace
+from mcuhome.compiler import container, localbuild, workspace
+from mcuhome.compiler import localbackend as lb
 from mcuhome.compiler.generate import APP_DIR
 from mcuhome.model import __version__
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import MODEL_VERSION
 from mcuhome.workbench import imgtool, signing
 
+from mcuhome_cli import cli
 from mcuhome_cli.cli import main
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
+
+#: The §7.2.1 build report a container build delivers (build-report.json):
+#: the report version, the mandatory signing block, and the optional
+#: memory table the linker enforced — no `inputs`/`outputs`/`signed`.
+REPORT = {
+    "report": 1,
+    "signing": {
+        "signature_type": "ecdsa-p256",
+        "arguments": {
+            "version": "0.1.0+0",
+            "header-size": 512,
+            "align": 4,
+            "slot-size": 912 * 1024,
+        },
+    },
+    "memory": [
+        {"image": "mcuboot", "region": "FLASH", "used": 57344, "total": 65536, "percent": 87.5},
+        {"image": "app", "region": "FLASH", "used": 859672, "total": 1048576, "percent": 82.0},
+    ],
+}
+
+
+def _fake_local_run(model, **kwargs):
+    """A stand-in for run_local_build: the files a container delivers, no docker.
+
+    Writes the unsigned firmware and the §7.2.1 build report into the
+    per-invocation ``out`` the real backend would, and answers a successful
+    :class:`~mcuhome.compiler.localbackend.LocalOutcome`. The private key is
+    deliberately not among the arguments a build ever receives — the whole
+    point of the local path — so this fake never sees one either.
+    """
+    work_root = Path(kwargs["work_root"])
+    out = work_root / "backend" / "inv" / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "firmware.hex").write_text(":00000001FF\n", "utf-8")
+    (out / "firmware.bin").write_bytes(bytes(1024))
+    (out / "bootloader.hex").write_text(":00000001FF\n", "utf-8")
+    (out / "build-report.json").write_text(json.dumps(REPORT), "utf-8")
+    roles = {
+        "firmware.hex": "firmware",
+        "firmware.bin": "firmware",
+        "bootloader.hex": "bootloader",
+        "build-report.json": "report",
+    }
+    artifacts = tuple(
+        lb.Artifact(root="out", path=name, role=role, sha256="0" * 64)
+        for name, role in roles.items()
+    )
+    outcome = lb.LocalOutcome(
+        action="build",
+        context_id="sha256:" + "1" * 64,
+        exit_code=0,
+        status="success",
+        successful=True,
+        artifacts=artifacts,
+        out=out,
+    )
+    return localbuild.LocalBuildResult(
+        outcome=outcome, out_dir=out, context_dir=work_root / "context", image=kwargs["image"]
+    )
+
+
+def _fake_imgtool(monkeypatch, tmp_path):
+    """Stub the one imgtool invocation and make discovery find a name.
+
+    The same shape the detached-signing tests use: ``_run`` is replaced so
+    no process starts, and ``MCUHOME_IMGTOOL`` names a script that is never
+    executed because ``_run`` — the only thing that would — is stubbed.
+    """
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str]) -> tuple[int, str]:
+        commands.append(command)
+        Path(command[-1]).write_bytes(b"signed")
+        return 0, ""
+
+    monkeypatch.setattr(imgtool, "_run", fake_run)
+    monkeypatch.setenv(imgtool.IMGTOOL_VAR, str(tmp_path / "imgtool.py"))
+    return commands
+
 
 #: A sysbuild build log: one linker report per image, each preceded by the
 #: only line that says whose output follows.
@@ -133,7 +215,12 @@ def test_unknown_device_exits_one(capsys) -> None:
 
 
 def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None:
-    """The whole command, with only the compiler itself stubbed out."""
+    """The whole --native command, unsigned build then the host signing step.
+
+    Since E56 --native builds unsigned and the host signs afterwards, so
+    the compiler stub leaves no signed file — the imgtool stub produces
+    ``zephyr.signed.*``, exactly as it does for a detached build.
+    """
     seen: dict[str, object] = {}
 
     def fake_run(plan, stream=None) -> tuple[int, str]:
@@ -143,16 +230,21 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
             output = plan.build_dir / image / "zephyr"
             output.mkdir(parents=True)
             (output / "zephyr.elf").write_text("", "utf-8")
-            (output / "zephyr.hex").write_text("", "utf-8")
-            (output / "zephyr.bin").write_text("x" * 1024, "utf-8")
-        # Not empty: the Matter OTA file wraps this, and wrapping nothing
-        # is refused (mcuhome.ota).
-        (plan.build_dir / APP_DIR / "zephyr" / "zephyr.signed.bin").write_text("s" * 512, "utf-8")
+            (output / "zephyr.hex").write_text(":00000001FF\n", "utf-8")
+            (output / "zephyr.bin").write_bytes(bytes(1024))
+        app_output = plan.build_dir / APP_DIR / "zephyr"
+        app_output.joinpath(".config").write_text(
+            'CONFIG_ROM_START_OFFSET=0x200\nCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.0.0+0"\n',
+            "utf-8",
+        )
+        # Sysbuild's combined hex falls back to the unsigned application; the
+        # build drops it, and no signed file exists until the host signs.
         (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text("", "utf-8")
         return 0, MEMORY_LOG
 
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", fake_run)
+    _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
     out = capsys.readouterr().out
@@ -162,14 +254,19 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     # The application it generated is the application it built.
     assert str(tmp_path / "app") in " ".join(seen["command"])  # type: ignore[arg-type]
     assert "--board nrf7002dk/nrf5340/cpuapp" in " ".join(seen["command"])  # type: ignore[arg-type]
+    # No private key in the west command — the bootloader gets the public
+    # half, the host signing step keeps the private one (E56).
+    assert "-DMCUHOME_DETACHED_SIGNING=y" in " ".join(seen["command"])  # type: ignore[arg-type]
     assert "Built bmp180-node." in out
     # Both images, each under its own sysbuild sub-directory, and the
-    # signed application next to the raw one.
+    # host-signed application next to the raw one.
     assert "mcuboot (bootloader)  1.0 KiB" in out
     assert "app (application)  1.0 KiB" in out
     assert str(tmp_path / "build" / "mcuboot" / "zephyr" / "zephyr.hex") in out
     assert str(tmp_path / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin") in out
-    assert str(tmp_path / "build" / "merged_nrf7002dk_nrf5340_cpuapp.hex") in out
+    # No combined hex: an unsigned build's is dropped, uniform with the
+    # container path, which never has one.
+    assert "merged_nrf7002dk_nrf5340_cpuapp.hex" not in out
     assert "memory: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
     assert "memory: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
     assert "memory: RAM 191.7 KiB of 448.0 KiB (42.8%)" in out
@@ -177,11 +274,14 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     assert "Flash layout (class A, MCUboot swap-using-offset, staging: external-flash)" in out
     assert "image-0  internal 0x014000..0x0f8000   912 KiB" in out
     # The delivery path: a class-A board with Matter gets a Matter OTA file
-    # wrapped around the signed image (ADR 0015 decision 5).
+    # wrapped around the freshly signed image (ADR 0015 decision 5).
     assert "Matter OTA image (version 0.1.0, SoftwareVersion 65536)" in out
     ota_file = tmp_path / "bmp180-node-0.1.0.ota"
     assert ota_file.is_file()
     manifest = json.loads((tmp_path / "build-manifest.json").read_text(encoding="utf-8"))
+    # E56: no build signs itself — the manifest records the host signature.
+    assert manifest["signing"]["signed_by_the_build"] is False
+    assert manifest["signing"]["signed"] is True
     assert manifest["ota"]["path"] == "bmp180-node-0.1.0.ota"
     assert manifest["ota"]["software_version"] == 65536
     assert manifest["ota"]["size"] == ota_file.stat().st_size
@@ -203,7 +303,11 @@ def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
         "run_build",
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
+    # --no-sign isolates the west command from the host signing step, which
+    # is identical for every snippet set: the command carries the snippets
+    # either way.
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     argv += ["-S", "debug-rtt", "-S", "thread-sed"]
     assert main(argv) == 0
     assert "--snippet" not in seen
@@ -221,7 +325,9 @@ def test_a_relative_build_dir_still_names_an_absolute_application(tmp_path, monk
         "run_build",
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
-    assert main(["build", str(EXAMPLE), "--build-dir", "out", "--native"]) == 0
+    argv = ["build", str(EXAMPLE), "--build-dir", "out", "--native"]
+    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
+    assert main(argv) == 0
     assert str((tmp_path / "out" / APP_DIR).resolve()) in seen
 
 
@@ -234,6 +340,7 @@ def test_build_uses_the_jobs_flag_and_reports_its_source(tmp_path, capsys, monke
         lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
     )
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "--jobs", "3"]
+    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
     assert "-o=-j3" in seen
     assert "jobs 3 (flag)" in capsys.readouterr().out
@@ -251,6 +358,7 @@ def test_build_uses_the_environment_variable_when_no_flag_is_given(
     )
     monkeypatch.setenv(workspace.JOBS_VAR, "5")
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
     assert "-o=-j5" in seen
     assert "jobs 5 (env)" in capsys.readouterr().out
@@ -269,6 +377,7 @@ def test_build_auto_detects_when_neither_flag_nor_environment_is_given(
     monkeypatch.delenv(workspace.JOBS_VAR, raising=False)
     monkeypatch.setattr(workspace, "detect_jobs", lambda: 7)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
+    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
     assert "-o=-j7" in seen
     assert "jobs 7 (auto)" in capsys.readouterr().out
@@ -300,63 +409,109 @@ def test_build_reports_a_failed_compile_and_points_at_the_build_directory(
     assert "Traceback" not in err
 
 
-def test_build_without_a_flag_compiles_in_the_container(tmp_path, capsys, monkeypatch) -> None:
-    """ADR 0007's default, as the command line sees it.
+def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """E54's default, as the command line sees it.
 
-    Nothing but the flag decides which of the two planners runs, and the
-    container is the one that runs when nobody says otherwise.
+    No flag drives the local ABI path: the container delivers an unsigned
+    image plus the §7.2.1 report, and the host signs it — one command to a
+    flashable image, with the private key never in a container.
     """
-    chosen: list[str] = []
-
-    def fake_plan(**kwargs) -> workspace.BuildPlan:
-        chosen.append("container")
-        plan = _planner(tmp_path)(**{k: v for k, v in kwargs.items() if k != "image"})
-        return replace(plan, image=kwargs["image"] or container.IMAGE)
-
-    monkeypatch.setattr(container, "plan_build", fake_plan)
-    monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (0, ""))
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
     monkeypatch.setattr(
         workspace, "plan_build", lambda **kwargs: pytest.fail("the native path ran by default")
     )
+    commands = _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
-    assert chosen == ["container"]
-    assert container.IMAGE in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"image {container.IMAGE}" in out
+    assert "Built bmp180-node." in out
+    # The unsigned image the container delivered was copied up, and the
+    # host signed it beside it.
+    assert (tmp_path / "firmware.bin").is_file()
+    assert (tmp_path / "firmware.hex").is_file()
+    assert (tmp_path / "build-report.json").is_file()
+    assert (tmp_path / "firmware.signed.bin").is_file()
+    assert (tmp_path / "firmware.signed.hex").is_file()
+    assert len(commands) == 2  # one imgtool sign per firmware encoding
+    for command in commands:
+        assert command[command.index("--slot-size") + 1] == str(912 * 1024)
+        assert command[command.index("--header-size") + 1] == "512"
+    # No host-side stage-4 tree: the container generates from the model.
+    assert not (tmp_path / "app").exists()
+    # The .ota wraps the freshly signed image, in the same step.
+    assert "Matter OTA image (version 0.1.0" in out
+    assert (tmp_path / "bmp180-node-0.1.0.ota").is_file()
+
+
+def test_the_local_build_prints_the_footprint_from_the_report(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """The memory table comes from the container's report, not a host log."""
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    _fake_imgtool(monkeypatch, tmp_path)
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "mcuboot: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
+    assert "app: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
 
 
 def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None:
-    def fake_plan(**kwargs) -> workspace.BuildPlan:
-        plan = _planner(tmp_path)(**{k: v for k, v in kwargs.items() if k != "image"})
-        return replace(plan, image=kwargs["image"] or container.IMAGE)
+    seen: dict[str, object] = {}
 
-    monkeypatch.setattr(container, "plan_build", fake_plan)
-    monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (0, ""))
+    def capture(model, **kwargs):
+        seen["image"] = kwargs["image"]
+        return _fake_local_run(model, **kwargs)
+
+    monkeypatch.setattr(localbuild, "run_local_build", capture)
+    _fake_imgtool(monkeypatch, tmp_path)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--image", "localhost/b:wip"]
     assert main(argv) == 0
-    assert "in localhost/b:wip" in capsys.readouterr().out
+    assert seen["image"] == "localhost/b:wip"
+    assert "image localhost/b:wip" in capsys.readouterr().out
 
 
-def test_a_missing_image_is_a_plain_refusal_after_a_finished_generation(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    """Stage 4 output is worth keeping even when stage 5 cannot start."""
-    monkeypatch.setattr(
-        container, "_run_quiet", lambda command, env: 0 if "version" in command else 1
-    )
-    monkeypatch.setenv(container.CCACHE_DIR_VAR, str(tmp_path / "cache"))
-    # The refusal under test is the image's, which comes after workspace
-    # discovery — and this test must pass on machines (CI among them)
-    # where the checkout does not live inside a west workspace.
-    monkeypatch.setattr(workspace, "require_topdir", lambda *starts: tmp_path)
+def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, monkeypatch) -> None:
+    """The local path's image-not-found is a typed refusal, not a crash."""
+
+    def refuse(model, **kwargs):
+        raise localbuild.lb.BuildError(
+            f"No build container on this host answers to {kwargs['image']}.",
+            hint="pull or build the image, or point --image at one",
+        )
+
+    monkeypatch.setattr(localbuild, "run_local_build", refuse)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-native"]) == 1
     captured = capsys.readouterr()
-    assert "Generated 12 files for bmp180-node" in captured.out
-    assert (tmp_path / "app" / "src" / "mcuhome_config.c").is_file()
-    assert "is not on this machine" in captured.err
-    assert "docker pull" in captured.err
-    assert "--native" in captured.err
+    assert "answers to" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) -> None:
+    """No --sdk-source and none in the environment: a typed refusal, no docker.
+
+    The image resolves (a stubbed inspect), and then the SDK pin cannot,
+    which is the refusal E54 asks be surfaced cleanly rather than as a
+    traceback. Docker is never reached for a build.
+    """
+    monkeypatch.delenv("MCUHOME_SDK_SOURCE", raising=False)
+
+    def inspect_only(argv, on_line=None):
+        if argv[1:3] == ["image", "inspect"]:
+            facts = {"RepoDigests": [f"{container.IMAGE}@sha256:{'1' * 64}"], "Config": {}}
+            return lb.Completed(0, json.dumps(facts))
+        raise AssertionError(f"no container should start: {argv}")
+
+    monkeypatch.setattr(lb, "_run_command", inspect_only)
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
+    err = capsys.readouterr().err
+    assert "SDK source" in err
+    assert "Traceback" not in err
 
 
 def test_build_generate_only_succeeds(tmp_path, capsys) -> None:
@@ -514,12 +669,17 @@ def test_a_refusal_before_the_tree_is_resolved_is_still_json(capsys) -> None:
 def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+    _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native", "--json"]) == 0
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
     assert document["device"] == "bmp180-node"
-    assert document["manifest"]["signing"]["signed_by_the_build"] is True
+    # E56: no build signs itself, and the host step then signs it — so the
+    # manifest the document mirrors says "not signed by the build" and yet
+    # "signed".
+    assert document["manifest"]["signing"]["signed_by_the_build"] is False
+    assert document["manifest"]["signing"]["signed"] is True
     assert json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8")) == document["manifest"]
 
 
@@ -561,6 +721,7 @@ def _fake_build_run(plan, stream=None) -> tuple[int, str]:
 def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+    _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]) == 0
     assert str(tmp_path / MANIFEST_FILE) in capsys.readouterr().out
@@ -731,6 +892,208 @@ def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) ->
     assert ota_file.is_file()
     assert document["ota"]["path"] == "bmp180-node-0.1.0.ota"
     assert document["ota"]["size"] == ota_file.stat().st_size
+
+
+# --------------------------------------------------------------------------
+# The default local path: auto-sign, --no-sign, the sign verb's two shapes,
+# and the security invariant (E54/E55)
+# --------------------------------------------------------------------------
+
+
+def test_no_sign_local_stops_at_the_unsigned_image(tmp_path, capsys, monkeypatch) -> None:
+    """--no-sign on the default path leaves the container's delivery untouched.
+
+    No signature, no combined-flash lookalike, no .ota — the same "nothing
+    flashable yet" state the detached workflow expects. The build report is
+    what a second machine signs from.
+    """
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    out_dir = tmp_path / "out"
+
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(out_dir),
+                "--no-sign",
+                "--public-key",
+                str(_public_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
+    out = capsys.readouterr().out
+    assert "public key" in out
+    assert f"mcuhome sign {out_dir}" in out
+    assert (out_dir / "firmware.bin").is_file()
+    assert (out_dir / "build-report.json").is_file()
+    # Nothing signed, so nothing to wrap and nothing that looks bootable.
+    assert not (out_dir / "firmware.signed.bin").exists()
+    assert not list(out_dir.glob("*.ota"))
+
+
+def test_no_sign_local_still_needs_a_public_key(tmp_path, capsys, monkeypatch) -> None:
+    """The bootloader needs the public key even when the build never signs."""
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 1
+    assert "mcuhome public-key" in capsys.readouterr().err
+
+
+def test_a_no_sign_rebuild_drops_a_prior_signed_image_and_ota(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """A --no-sign rebuild in a signed directory leaves nothing flashable behind.
+
+    The local path copies the container's UNSIGNED firmware into the
+    persistent build directory. A prior signed build's ``firmware.signed.*``
+    and its ``.ota`` would otherwise survive there, next to fresh unrelated
+    unsigned firmware, while the CLI reports nothing flashable — a
+    boot-bricking lookalike. The rebuild drops them.
+    """
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    out_dir = tmp_path / "out"
+
+    # A first build that signs on the host: firmware.signed.* and an .ota land.
+    _fake_imgtool(monkeypatch, tmp_path)
+    assert main(["build", str(EXAMPLE), "--build-dir", str(out_dir)]) == 0
+    capsys.readouterr()
+    assert (out_dir / "firmware.signed.bin").is_file()
+    assert (out_dir / "firmware.signed.hex").is_file()
+    assert list(out_dir.glob("*.ota"))
+
+    # A --no-sign rebuild in the SAME directory.
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(out_dir),
+                "--no-sign",
+                "--public-key",
+                str(_public_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
+
+    # Only the fresh unsigned firmware remains; the stale signed lookalikes
+    # and the .ota are gone.
+    assert (out_dir / "firmware.bin").is_file()
+    assert not (out_dir / "firmware.signed.bin").exists()
+    assert not (out_dir / "firmware.signed.hex").exists()
+    assert not list(out_dir.glob("*.ota"))
+
+
+def test_sign_reads_a_build_report_directory(tmp_path, capsys, monkeypatch) -> None:
+    """`mcuhome sign` on the container backend's delivery uses the §7.2.1 report."""
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    out_dir = tmp_path / "out"
+    main(
+        [
+            "build",
+            str(EXAMPLE),
+            "--build-dir",
+            str(out_dir),
+            "--no-sign",
+            "--public-key",
+            str(_public_key(tmp_path)),
+        ]
+    )
+    capsys.readouterr()
+    # A build-report directory holds no build-manifest.json — the report
+    # shape is the one chosen.
+    assert (out_dir / "build-report.json").is_file()
+    assert not (out_dir / MANIFEST_FILE).exists()
+
+    commands = _fake_imgtool(monkeypatch, tmp_path)
+    key = tmp_path / "signing.key"
+    key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    assert main(["sign", str(out_dir), "--signing-key", str(key)]) == 0
+
+    out = capsys.readouterr().out
+    assert "Signed the application image" in out
+    assert (out_dir / "firmware.signed.bin").is_file()
+    assert (out_dir / "firmware.signed.hex").is_file()
+    assert len(commands) == 2
+    for command in commands:
+        assert command[command.index("--slot-size") + 1] == str(912 * 1024)
+        assert command[command.index("--header-size") + 1] == "512"
+        assert command[command.index("--align") + 1] == "4"
+
+
+def test_sign_chooses_the_report_shape_by_which_file_is_present(tmp_path) -> None:
+    """One verb, two report shapes: build-manifest wins, else build-report."""
+    manifest_dir = tmp_path / "native"
+    manifest_dir.mkdir()
+    (manifest_dir / MANIFEST_FILE).write_text("{}", "utf-8")
+    assert cli._target_is_build_report(manifest_dir) is False
+
+    report_dir = tmp_path / "container"
+    report_dir.mkdir()
+    (report_dir / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(REPORT), "utf-8")
+    assert cli._target_is_build_report(report_dir) is True
+
+    # A directory that carries both keeps the richer manifest path.
+    both = tmp_path / "both"
+    both.mkdir()
+    (both / MANIFEST_FILE).write_text("{}", "utf-8")
+    (both / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(REPORT), "utf-8")
+    assert cli._target_is_build_report(both) is False
+
+    # The report file named directly is unambiguous.
+    assert cli._target_is_build_report(report_dir / imgtool.BUILD_REPORT_FILE) is True
+    assert cli._target_is_build_report(manifest_dir / MANIFEST_FILE) is False
+
+
+def test_sign_on_a_directory_with_no_build_output_is_a_clean_refusal(tmp_path, capsys) -> None:
+    """`mcuhome sign` on a directory holding neither a manifest nor a report refuses cleanly.
+
+    Neither file present means the manifest path is taken (a manifest would
+    win if it existed), so the refusal is the missing build-manifest.json —
+    a typed message, not a traceback.
+    """
+    key = tmp_path / "signing.key"
+    key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert main(["sign", str(empty), "--signing-key", str(key)]) == 1
+    err = capsys.readouterr().err
+    assert MANIFEST_FILE in err
+    assert "Traceback" not in err
+
+
+def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monkeypatch) -> None:
+    """E55 security invariant, at the command boundary.
+
+    The container gets the **public** key and nothing else: the private key
+    is never one of the arguments the build backend is handed, and what it
+    *is* handed for the key is a public key. The docker-argv half of the
+    same invariant is asserted against the real backend in
+    ``mcuhome/tests_py/test_localbuild.py``.
+    """
+    handed: dict[str, object] = {}
+
+    def record(model, **kwargs):
+        handed.update(kwargs)
+        return _fake_local_run(model, **kwargs)
+
+    monkeypatch.setattr(localbuild, "run_local_build", record)
+    _fake_imgtool(monkeypatch, tmp_path)
+
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+
+    # The private key was generated on first need; name its path and prove
+    # it appears in nothing the backend received.
+    key_path = signing.default_key_path(dict(os.environ))
+    assert key_path.is_file()  # it exists — and yet:
+    everything = " ".join(str(value) for value in handed.values())
+    assert str(key_path) not in everything
+    # What the backend WAS given for the key is the public half.
+    assert signing.looks_like_p256_public_key(str(handed["signing_pub"]))
+    assert not signing.looks_like_p256_key(str(handed["signing_pub"]))
 
 
 # --------------------------------------------------------------------------
