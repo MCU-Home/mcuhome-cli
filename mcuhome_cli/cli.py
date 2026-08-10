@@ -804,10 +804,31 @@ def _collect_local_artifacts(
 
 
 def _local_build_failed(outcome: localbuild.lb.LocalOutcome) -> BuildError:
-    """A container build whose result was not a conforming deliverable."""
+    """A container build whose result was not a conforming deliverable.
+
+    Two voices speak here and both are quoted. ``outcome.problems`` is the
+    *backend's* judgement — which §5.3 condition failed. The result
+    document is the *program's* account of itself: ``reason``, the §5.4
+    error message and its details. A program that refuses before it runs
+    anything writes only that document and not a line of build log, so
+    dropping it here left "status 'failure'; exited 1" as the entire
+    diagnosis of a failure the program had explained precisely.
+    """
     problems = "; ".join(outcome.problems) or "the build container returned no usable result"
+    said = []
+    document = outcome.result or {}
+    error = document.get("error")
+    error = error if isinstance(error, dict) else {}
+    if document.get("reason"):
+        said.append(str(document["reason"]))
+    if error.get("message"):
+        said.append(str(error["message"]))
+    details = error.get("details")
+    if details:
+        said.append(json.dumps(details, sort_keys=True))
+    account = f" The program said: {' — '.join(said)}" if said else ""
     return BuildError(
-        f"The firmware did not build: {problems}.",
+        f"The firmware did not build: {problems}.{account}",
         hint=(
             "the build ran in the MCUHome container through the build-container "
             "ABI (ADR 0018). The container log above carries what west and the "

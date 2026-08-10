@@ -1307,3 +1307,52 @@ def test_model_errors_serialize_in_json_mode(tmp_path, capsys) -> None:
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is False
     assert document["errors"][0]["message"].startswith("The device model")
+
+
+def test_a_failed_container_build_quotes_the_programs_own_account():
+    """§5.4's reason, error message and details reach the user verbatim.
+
+    A program that refuses before it runs anything writes only the result
+    document and no build log — so the document is the entire diagnosis,
+    and dropping it once reduced a precise in-container refusal to
+    "status 'failure'; exited 1" in CI.
+    """
+    outcome = lb.LocalOutcome(
+        action="build",
+        context_id="sha256:" + "1" * 64,
+        exit_code=1,
+        status="failure",
+        successful=False,
+        problems=("the program reported status 'failure'", "the program exited 1"),
+        result={
+            "result": 1,
+            "action": "build",
+            "status": "failure",
+            "reason": "error.context.mismatch",
+            "error": {
+                "retryable": False,
+                "message": "the context disagrees with its integrity list",
+                "details": {"paths": ["model/device-model.json"]},
+            },
+        },
+    )
+    failure = cli._local_build_failed(outcome)
+    assert "error.context.mismatch" in failure.message
+    assert "disagrees with its integrity list" in failure.message
+    assert "model/device-model.json" in failure.message
+
+
+def test_a_failed_container_build_without_a_document_stays_terse():
+    """No result document, no invented account — the judgement stands alone."""
+    outcome = lb.LocalOutcome(
+        action="build",
+        context_id="",
+        exit_code=137,
+        status="failure",
+        successful=False,
+        problems=("no result document was written at the path the request named",),
+        result=None,
+    )
+    failure = cli._local_build_failed(outcome)
+    assert "The program said" not in failure.message
+    assert "no result document" in failure.message
