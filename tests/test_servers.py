@@ -90,9 +90,7 @@ def test_a_url_is_used_as_given_and_never_opens_the_file(tmp_path) -> None:
     """Rung 1 and 2 behave exactly as before E63: address in, address out."""
     env = _configure(tmp_path, toml="this is not TOML at all {{{")
     resolution = servers.resolve("wss://direct.example/ws", token="from-the-flag", env=env)
-    assert resolution == servers.Resolution(
-        url="wss://direct.example/ws", token="from-the-flag"
-    )
+    assert resolution == servers.Resolution(url="wss://direct.example/ws", token="from-the-flag")
 
 
 def test_a_url_without_a_token_stays_without_one(tmp_path) -> None:
