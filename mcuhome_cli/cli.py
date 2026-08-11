@@ -34,6 +34,14 @@ host-side step signs it (:func:`_sign_after_build`, E56) — so the private
 key is absent from every build on every method, not merely from the ones
 that happen to run elsewhere.
 
+``--sdk-source`` / :data:`SDK_SOURCE_VAR` serve ``local`` and ``remote``
+alike (E65). Both create a build context, a context is
+content-addressed over the SDK package's hash, and the pin is therefore
+resolved *here* on either method — what differs is only who fetches the
+bytes afterwards and checks them against it. ``--server``/``--token``
+(:data:`SERVER_VAR`, :data:`TOKEN_VAR`) are the ``remote`` method's own
+rungs, and ``--image`` the ``local`` method's.
+
 ``validate`` and ``build`` take ``--json``, which replaces the whole
 human rendering with one machine-readable document on stdout — the
 resolved model or the build manifest on success, the errors of
@@ -110,7 +118,8 @@ __all__ = [
 BUILD_DIR = "build"
 
 #: ``PATH``-style environment variable naming SDK source directories for
-#: the default (container) build path. ``--sdk-source`` beats it.
+#: **both** container-shaped build methods — the default ``local`` one and
+#: ``remote`` (E65). ``--sdk-source`` beats it.
 SDK_SOURCE_VAR = "MCUHOME_SDK_SOURCE"
 
 #: Which of the three build methods runs, when no flag says. Second rung
@@ -847,11 +856,20 @@ def _build_delivered(
 def _sdk_sources(args: argparse.Namespace, env: dict[str, str]) -> tuple[Path, ...]:
     """SDK source directories: ``--sdk-source`` (repeatable) then the variable.
 
-    The local build fetches the MCUHome SDK as a hash-pinned package from
-    operator-configured directories only (ADR 0018, contract v1's first
-    tier). ``--sdk-source`` names one and repeats; ``MCUHOME_SDK_SOURCE``
-    is a ``PATH``-style list of them. Order is preserved and duplicates
-    dropped. Irrelevant to ``local-dev``, which needs no SDK package.
+    MCUHome's SDK travels into a build as a hash-pinned package resolved
+    from configured directories only (ADR 0018, contract v1's first tier).
+    ``--sdk-source`` names one and repeats; ``MCUHOME_SDK_SOURCE`` is a
+    ``PATH``-style list of them. Order is preserved and duplicates
+    dropped.
+
+    They serve **both** container-shaped methods (E65) and for the same
+    reason: a build context carries the package's version *and* its
+    sha256, and the hash is part of the identity the build is attributed
+    to — so the pin is resolved on this machine whether a container here
+    or a build server elsewhere goes on to fetch the bytes. On ``remote``
+    the server resolves the version against its own sources and verifies
+    what it finds against this hash, which is why no round trip asks it
+    first. Irrelevant to ``local-dev``, which needs no SDK package.
     """
     sources = [Path(entry).expanduser() for entry in (args.sdk_source or [])]
     from_env = env.get(SDK_SOURCE_VAR)
@@ -1542,10 +1560,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="DIR",
         help=(
-            "directory holding the hash-pinned MCUHome SDK package the build "
-            "container fetches (repeatable; searched in order). The default "
-            f"container build needs one; {SDK_SOURCE_VAR} is a PATH-style list of "
-            f"them, and --method {api.LOCAL_DEV} needs none"
+            "directory holding the hash-pinned MCUHome SDK package this build is "
+            "pinned to (repeatable; searched in order). Needed by --method "
+            f"{api.LOCAL} and --method {api.REMOTE} alike — both create a build "
+            f"context, and the pin is part of its identity; {SDK_SOURCE_VAR} is a "
+            f"PATH-style list of them, and --method {api.LOCAL_DEV} needs none"
         ),
     )
     build_parser_.add_argument(

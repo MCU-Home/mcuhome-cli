@@ -1510,23 +1510,54 @@ def test_remote_without_a_server_refuses_and_names_the_two_knobs(
     assert "Traceback" not in err
 
 
-def test_remote_with_a_server_says_which_step_is_still_missing(
+def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """The gap the report names: nothing resolves the SDK pin yet.
+    """The one thing left that ``remote`` cannot invent: which SDK package.
 
-    E61 moved the gap rather than closing it — the container is the
-    backend's to choose now, so no ``capabilities`` round trip is needed
-    to write a context, but the SDK package hash is still a hashed
-    identity input with no resolver on this path.
+    E65 closed the gap — this method creates its own build context now —
+    and left exactly one input a user must supply, the same one the
+    default ``local`` method needs: a directory holding the hash-pinned
+    SDK package. The refusal names ``--sdk-source`` and the variable, and
+    does **not** offer another method as the workaround, because there is
+    nothing to work around any more.
     """
     monkeypatch.setenv(cli.SERVER_VAR, "ws://build.example/session")
+    monkeypatch.delenv(cli.SDK_SOURCE_VAR, raising=False)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "remote"]
     assert main(argv) == 1
     err = capsys.readouterr().err
-    assert "build context" in err
-    assert "SDK package hash" in err
+    assert "--sdk-source" in err
+    assert cli.SDK_SOURCE_VAR in err
     assert "Traceback" not in err
+
+
+def test_the_sdk_source_variable_reaches_a_remote_request_too(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """E65: the ladder's second rung serves ``remote``, not only ``local``.
+
+    ``MCUHOME_SDK_SOURCE`` was documented for "the default build path"
+    while the ``remote`` method had no use for a pin at all. It has one
+    now — the same one — so the variable is asserted against the request
+    the remote method actually receives, rather than against the helper
+    that reads it, which would prove only that the helper works.
+    """
+    seen: list[buildmethods.BuildRequest] = []
+
+    async def refuse(request, *, method):
+        seen.append(request)
+        raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
+
+    monkeypatch.setattr(cli.api, "run_build", refuse)
+    monkeypatch.setenv(
+        cli.SDK_SOURCE_VAR, os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
+    )
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv += ["--server", "ws://build.example/session"]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert seen[0].sdk_sources == (tmp_path / "a", tmp_path / "b")
 
 
 def _capture_signing(monkeypatch) -> list[dict]:
@@ -1546,14 +1577,20 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
 
     Each method is stubbed at its own backend seam — the west build for
     ``local-dev``, ``run_local_build`` for ``local``, and the dispatch
-    itself for ``remote``, which the command line cannot yet drive to a
-    result because it has no build context to send. What is asserted is
-    the same thing for all three: the signing step ran exactly once, on
+    itself for ``remote``, whose real composition (a session against a
+    build server) is tested in the library's own suite. What is asserted
+    is the same thing for all three: the signing step ran exactly once, on
     the build directory, for this device — and the only value that
     differs is the *name of the report* it was told to read, which is
     E55's "both shapes" rule and not a second code path.
+
+    The ``remote`` leg also carries an ``--sdk-source``, because since E65
+    it needs one for the same reason ``local`` does: it creates its own
+    build context and the SDK pin is part of that context's identity. The
+    request it produced is checked below.
     """
     calls = _capture_signing(monkeypatch)
+    requests: list[buildmethods.BuildRequest] = []
 
     # local-dev, through the real dispatch onto a stubbed west build.
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
@@ -1572,6 +1609,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     remote_dir = tmp_path / "remote"
 
     async def delivered(request, *, method):
+        requests.append(request)
         out = tmp_path / "delivery"
         out.mkdir(exist_ok=True)
         (out / "firmware.bin").write_bytes(bytes(16))
@@ -1592,10 +1630,19 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
         )
 
     monkeypatch.setattr(cli.api, "run_build", delivered)
+    sdk_source = tmp_path / "packages"
+    sdk_source.mkdir()
     argv = ["build", str(EXAMPLE), "--build-dir", str(remote_dir), "--method", "remote"]
-    argv += ["--server", "ws://build.example/session"]
+    argv += ["--server", "ws://build.example/session", "--sdk-source", str(sdk_source)]
     assert main(argv) == 0
     capsys.readouterr()
+
+    # What the command line handed the remote method: the server, the
+    # token rung left empty, and the SDK source — the same field the
+    # `local` method reads, which is the point of E65 (one resolver, one
+    # knob, two methods).
+    assert [request.server for request in requests] == ["ws://build.example/session"]
+    assert requests[0].sdk_sources == (sdk_source,)
 
     assert [call["device"] for call in calls] == ["bmp180-node"] * 3
     assert [call["out_dir"] for call in calls] == [
