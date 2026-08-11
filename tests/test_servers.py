@@ -46,10 +46,10 @@ TWO_SERVERS = """\
 default = "home"
 
 [server.home]
-url = "wss://build.lan:8443/session"
+url = "wss://build.lan:8443/ws"
 
 [server.laptop]
-url = "ws://127.0.0.1:8080/session"
+url = "ws://127.0.0.1:8080/ws"
 """
 
 
@@ -61,10 +61,10 @@ url = "ws://127.0.0.1:8080/session"
 @pytest.mark.parametrize(
     "value",
     [
-        "wss://build.lan:8443/session",
-        "ws://127.0.0.1:8080/session",
-        "https://build.example/session",
-        "unix+ws://socket/session",
+        "wss://build.lan:8443/ws",
+        "ws://127.0.0.1:8080/ws",
+        "https://build.example/ws",
+        "unix+ws://socket/ws",
     ],
 )
 def test_an_address_is_recognised_by_its_scheme(value) -> None:
@@ -73,12 +73,12 @@ def test_an_address_is_recognised_by_its_scheme(value) -> None:
 
 @pytest.mark.parametrize(
     "value",
-    ["home", "build-lan", "laptop2", "wss", "ws:/typo", "//host/session", "a.b.c"],
+    ["home", "build-lan", "laptop2", "wss", "ws:/typo", "//host/ws", "a.b.c"],
 )
 def test_everything_without_a_scheme_is_a_label(value) -> None:
     """Including the near-misses: they are looked up, never dialled.
 
-    ``ws:/typo`` and ``//host/session`` are not addresses a socket can be
+    ``ws:/typo`` and ``//host/ws`` are not addresses a socket can be
     opened on, so treating them as labels turns a typo into "not a build
     server MCUHome is configured with" plus the list of ones that are —
     which is the message that leads to the fix.
@@ -89,16 +89,16 @@ def test_everything_without_a_scheme_is_a_label(value) -> None:
 def test_a_url_is_used_as_given_and_never_opens_the_file(tmp_path) -> None:
     """Rung 1 and 2 behave exactly as before E63: address in, address out."""
     env = _configure(tmp_path, toml="this is not TOML at all {{{")
-    resolution = servers.resolve("wss://direct.example/session", token="from-the-flag", env=env)
+    resolution = servers.resolve("wss://direct.example/ws", token="from-the-flag", env=env)
     assert resolution == servers.Resolution(
-        url="wss://direct.example/session", token="from-the-flag"
+        url="wss://direct.example/ws", token="from-the-flag"
     )
 
 
 def test_a_url_without_a_token_stays_without_one(tmp_path) -> None:
     """A server named by address uses --token, the variable, or nothing."""
     env = _configure(tmp_path, toml=TWO_SERVERS, tokens={"home": TOKEN})
-    assert servers.resolve("wss://direct.example/session", token=None, env=env).token is None
+    assert servers.resolve("wss://direct.example/ws", token=None, env=env).token is None
 
 
 # --------------------------------------------------------------------------
@@ -109,7 +109,7 @@ def test_a_url_without_a_token_stays_without_one(tmp_path) -> None:
 def test_a_label_resolves_to_its_url_and_its_token(tmp_path) -> None:
     env = _configure(tmp_path, toml=TWO_SERVERS, tokens={"laptop": TOKEN})
     resolution = servers.resolve("laptop", token=None, env=env)
-    assert resolution.url == "ws://127.0.0.1:8080/session"
+    assert resolution.url == "ws://127.0.0.1:8080/ws"
     assert resolution.token == TOKEN
     assert resolution.label == "laptop"
     assert resolution.warnings == ()
@@ -119,7 +119,7 @@ def test_the_default_is_what_no_name_resolves_to(tmp_path) -> None:
     env = _configure(tmp_path, toml=TWO_SERVERS, tokens={"home": TOKEN})
     resolution = servers.resolve(None, token=None, env=env)
     assert (resolution.url, resolution.token, resolution.label) == (
-        "wss://build.lan:8443/session",
+        "wss://build.lan:8443/ws",
         TOKEN,
         "home",
     )
@@ -133,7 +133,7 @@ def test_a_token_from_above_wins_and_the_file_is_not_even_opened(tmp_path) -> No
     """
     env = _configure(tmp_path, toml=TWO_SERVERS)
     resolution = servers.resolve("home", token="from-the-flag", env=env)
-    assert (resolution.url, resolution.token) == ("wss://build.lan:8443/session", "from-the-flag")
+    assert (resolution.url, resolution.token) == ("wss://build.lan:8443/ws", "from-the-flag")
 
 
 def test_a_trailing_newline_is_not_part_of_the_token(tmp_path) -> None:
@@ -206,7 +206,7 @@ def test_a_readable_by_others_token_file_warns_loudly_and_still_builds(tmp_path,
 
 
 def test_a_malformed_file_is_refused_at_the_file(tmp_path) -> None:
-    env = _configure(tmp_path, toml='default = "home"\n[server.home\nurl = "wss://x/session"\n')
+    env = _configure(tmp_path, toml='default = "home"\n[server.home\nurl = "wss://x/ws"\n')
     with pytest.raises(ConfigError) as refusal:
         servers.resolve(None, token=None, env=env)
     assert "not valid TOML" in refusal.value.message
@@ -215,7 +215,7 @@ def test_a_malformed_file_is_refused_at_the_file(tmp_path) -> None:
 
 def test_a_default_naming_a_server_that_is_not_there_is_refused(tmp_path) -> None:
     env = _configure(
-        tmp_path, toml='default = "office"\n\n[server.home]\nurl = "wss://build.lan/session"\n'
+        tmp_path, toml='default = "office"\n\n[server.home]\nurl = "wss://build.lan/ws"\n'
     )
     with pytest.raises(ConfigError) as refusal:
         servers.resolve(None, token=None, env=env)
@@ -238,9 +238,9 @@ def test_servers_without_a_default_are_refused_only_when_nothing_chose(tmp_path)
     moment that becomes a problem, and the moment the labels are worth
     listing.
     """
-    toml = '[server.home]\nurl = "wss://build.lan/session"\n'
+    toml = '[server.home]\nurl = "wss://build.lan/ws"\n'
     env = _configure(tmp_path, toml=toml, tokens={"home": TOKEN})
-    assert servers.resolve("home", token=None, env=env).url == "wss://build.lan/session"
+    assert servers.resolve("home", token=None, env=env).url == "wss://build.lan/ws"
     with pytest.raises(ConfigError) as refusal:
         servers.resolve(None, token=None, env=env)
     assert "names no default" in refusal.value.message
@@ -265,7 +265,7 @@ def test_an_address_without_a_scheme_is_refused(tmp_path) -> None:
     with pytest.raises(ConfigError) as refusal:
         servers.resolve("home", token=None, env=env)
     assert "without a scheme" in refusal.value.message
-    assert "wss://build.lan:8443/session" in (refusal.value.hint or "")
+    assert "wss://build.lan:8443/ws" in (refusal.value.hint or "")
 
 
 @pytest.mark.parametrize("label", ["", "../../etc/shadow", "a/b", "."])
@@ -277,14 +277,14 @@ def test_a_label_that_is_not_a_name_is_refused(tmp_path, label) -> None:
     somewhere else entirely, and "somewhere else entirely" is not a thing
     to be quiet about.
     """
-    env = _configure(tmp_path, toml=f'[server."{label}"]\nurl = "wss://x/session"\n')
+    env = _configure(tmp_path, toml=f'[server."{label}"]\nurl = "wss://x/ws"\n')
     with pytest.raises(ConfigError) as refusal:
         servers.resolve(None, token=None, env=env)
     assert "usable name" in refusal.value.message
 
 
 def test_a_label_that_is_a_url_is_refused(tmp_path) -> None:
-    env = _configure(tmp_path, toml='[server."wss://build.lan/session"]\nurl = "wss://x/session"\n')
+    env = _configure(tmp_path, toml='[server."wss://build.lan/ws"]\nurl = "wss://x/ws"\n')
     with pytest.raises(ConfigError) as refusal:
         servers.resolve(None, token=None, env=env)
     assert "URL rather than a name" in refusal.value.message
@@ -320,11 +320,11 @@ def test_unknown_keys_are_warned_about_and_the_build_goes_on(tmp_path) -> None:
     """
     toml = (
         'default = "home"\ntimeout = 30\n\n'
-        '[server.home]\nurl = "wss://build.lan/session"\nverify = false\n'
+        '[server.home]\nurl = "wss://build.lan/ws"\nverify = false\n'
     )
     env = _configure(tmp_path, toml=toml, tokens={"home": TOKEN})
     resolution = servers.resolve(None, token=None, env=env)
-    assert resolution.url == "wss://build.lan/session"
+    assert resolution.url == "wss://build.lan/ws"
     assert len(resolution.warnings) == 2
     assert any('"timeout"' in warning for warning in resolution.warnings)
     assert any('"verify"' in warning for warning in resolution.warnings)

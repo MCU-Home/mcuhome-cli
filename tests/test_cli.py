@@ -1490,10 +1490,10 @@ def test_an_unknown_method_is_a_refusal_listing_the_real_ones(tmp_path, capsys) 
 
 def test_the_server_ladder_takes_the_flag_then_the_variable() -> None:
     """E53, verbatim: --server/--token, then MCUHOME_BUILD_SERVER/_TOKEN."""
-    env = {cli.SERVER_VAR: "ws://from-env/session", cli.TOKEN_VAR: "env-token"}
-    assert cli._remote_server(_build_args(), env) == ("ws://from-env/session", "env-token")
-    args = _build_args(server="ws://from-flag/session", token="flag-token")
-    assert cli._remote_server(args, env) == ("ws://from-flag/session", "flag-token")
+    env = {cli.SERVER_VAR: "ws://from-env/ws", cli.TOKEN_VAR: "env-token"}
+    assert cli._remote_server(_build_args(), env) == ("ws://from-env/ws", "env-token")
+    args = _build_args(server="ws://from-flag/ws", token="flag-token")
+    assert cli._remote_server(args, env) == ("ws://from-flag/ws", "flag-token")
 
 
 def test_the_server_ladder_falls_to_the_file_and_then_to_nothing(tmp_path) -> None:
@@ -1510,20 +1510,20 @@ def test_the_server_ladder_falls_to_the_file_and_then_to_nothing(tmp_path) -> No
     directory = config_home / "mcuhome"
     (directory / "tokens").mkdir(parents=True)
     (directory / "build-servers.toml").write_text(
-        'default = "home"\n\n[server.home]\nurl = "wss://build.lan:8443/session"\n',
+        'default = "home"\n\n[server.home]\nurl = "wss://build.lan:8443/ws"\n',
         encoding="utf-8",
     )
     (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
     (directory / "tokens" / "home").chmod(0o600)
 
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    assert cli._remote_server(_build_args(), env) == ("wss://build.lan:8443/session", "file-token")
+    assert cli._remote_server(_build_args(), env) == ("wss://build.lan:8443/ws", "file-token")
 
     # The rung above still wins, and a label reaches the file from it.
-    with_flag = _build_args(server="ws://from-flag/session", token="flag-token")
-    assert cli._remote_server(with_flag, env) == ("ws://from-flag/session", "flag-token")
+    with_flag = _build_args(server="ws://from-flag/ws", token="flag-token")
+    assert cli._remote_server(with_flag, env) == ("ws://from-flag/ws", "flag-token")
     assert cli._remote_server(_build_args(server="home"), env) == (
-        "wss://build.lan:8443/session",
+        "wss://build.lan:8443/ws",
         "file-token",
     )
 
@@ -1545,7 +1545,7 @@ def test_a_configured_label_reaches_the_remote_method_with_its_token(
     directory = config_home / "mcuhome"
     (directory / "tokens").mkdir(parents=True)
     (directory / "build-servers.toml").write_text(
-        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+        '[server.home]\nurl = "wss://build.lan:8443/ws"\n', encoding="utf-8"
     )
     (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
     (directory / "tokens" / "home").chmod(0o600)
@@ -1562,7 +1562,7 @@ def test_a_configured_label_reaches_the_remote_method_with_its_token(
     argv += ["--server", "home", "--sdk-source", str(tmp_path)]
     assert main(argv) == 1
     capsys.readouterr()
-    assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/session", "file-token")
+    assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/ws", "file-token")
 
 
 def test_an_unknown_label_is_a_refusal_listing_the_configured_ones(
@@ -1572,7 +1572,7 @@ def test_an_unknown_label_is_a_refusal_listing_the_configured_ones(
     directory = tmp_path / "xdg" / "mcuhome"
     directory.mkdir(parents=True)
     (directory / "build-servers.toml").write_text(
-        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+        '[server.home]\nurl = "wss://build.lan:8443/ws"\n', encoding="utf-8"
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
@@ -1615,7 +1615,7 @@ def test_a_group_readable_token_warns_on_stderr(tmp_path, capsys, monkeypatch) -
     directory = config_home / "mcuhome"
     (directory / "tokens").mkdir(parents=True)
     (directory / "build-servers.toml").write_text(
-        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+        '[server.home]\nurl = "wss://build.lan:8443/ws"\n', encoding="utf-8"
     )
     (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
     (directory / "tokens" / "home").chmod(0o644)
@@ -1660,7 +1660,7 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
     does **not** offer another method as the workaround, because there is
     nothing to work around any more.
     """
-    monkeypatch.setenv(cli.SERVER_VAR, "ws://build.example/session")
+    monkeypatch.setenv(cli.SERVER_VAR, "ws://build.example/ws")
     monkeypatch.delenv(cli.SDK_SOURCE_VAR, raising=False)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "remote"]
     assert main(argv) == 1
@@ -1692,7 +1692,7 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
         cli.SDK_SOURCE_VAR, os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
     )
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
-    argv += ["--server", "ws://build.example/session"]
+    argv += ["--server", "ws://build.example/ws"]
     assert main(argv) == 1
     capsys.readouterr()
     assert seen[0].sdk_sources == (tmp_path / "a", tmp_path / "b")
@@ -1771,7 +1771,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     sdk_source = tmp_path / "packages"
     sdk_source.mkdir()
     argv = ["build", str(EXAMPLE), "--build-dir", str(remote_dir), "--method", "remote"]
-    argv += ["--server", "ws://build.example/session", "--sdk-source", str(sdk_source)]
+    argv += ["--server", "ws://build.example/ws", "--sdk-source", str(sdk_source)]
     assert main(argv) == 0
     capsys.readouterr()
 
@@ -1779,7 +1779,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     # token rung left empty, and the SDK source — the same field the
     # `local` method reads, which is the point of E65 (one resolver, one
     # knob, two methods).
-    assert [request.server for request in requests] == ["ws://build.example/session"]
+    assert [request.server for request in requests] == ["ws://build.example/ws"]
     assert requests[0].sdk_sources == (sdk_source,)
 
     assert [call["device"] for call in calls] == ["bmp180-node"] * 3
