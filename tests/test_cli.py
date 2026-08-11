@@ -520,7 +520,20 @@ def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) 
 
     def inspect_only(argv, on_line=None):
         if argv[1:3] == ["image", "inspect"]:
-            facts = {"RepoDigests": [f"{container.IMAGE}@sha256:{'1' * 64}"], "Config": {}}
+            # The coupling labels are part of resolving: an image
+            # carrying no `org.mcuhome.zephyr` serves no line and is
+            # refused before the SDK is ever looked for (§2.1.1), which
+            # would be a different refusal than the one under test.
+            facts = {
+                "RepoDigests": [f"{container.IMAGE}@sha256:{'1' * 64}"],
+                "Config": {
+                    "Labels": {
+                        "org.mcuhome.contract": "1",
+                        "org.mcuhome.zephyr": "4.4.0",
+                        "org.mcuhome.toolchain": "zephyr-sdk-1.0.1",
+                    }
+                },
+            }
             return lb.Completed(0, json.dumps(facts))
         raise AssertionError(f"no container should start: {argv}")
 
@@ -1500,13 +1513,19 @@ def test_remote_without_a_server_refuses_and_names_the_two_knobs(
 def test_remote_with_a_server_says_which_step_is_still_missing(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """The gap the report names: nothing resolves the container digest yet."""
+    """The gap the report names: nothing resolves the SDK pin yet.
+
+    E61 moved the gap rather than closing it — the container is the
+    backend's to choose now, so no ``capabilities`` round trip is needed
+    to write a context, but the SDK package hash is still a hashed
+    identity input with no resolver on this path.
+    """
     monkeypatch.setenv(cli.SERVER_VAR, "ws://build.example/session")
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "remote"]
     assert main(argv) == 1
     err = capsys.readouterr().err
     assert "build context" in err
-    assert "capabilities" in err
+    assert "SDK package hash" in err
     assert "Traceback" not in err
 
 
