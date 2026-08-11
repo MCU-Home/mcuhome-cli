@@ -19,10 +19,10 @@ every one of those. Two files, and only one of them has to be kept::
     default = "home"
 
     [server.home]
-    url = "wss://build.lan:8443/session"
+    url = "wss://build.lan:8443/ws"
 
     [server.laptop]
-    url = "ws://127.0.0.1:8080/session"
+    url = "ws://127.0.0.1:8080/ws"
 
 ``--server``/``MCUHOME_BUILD_SERVER`` take **a label or a URL**, and the
 two are told apart by the one thing that cannot be mistaken: a URL has a
@@ -105,7 +105,7 @@ def looks_like_url(value: str) -> bool:
     """Whether *value* is a URL rather than a label (E63).
 
     Deliberately one rule, stated once: a URL carries a scheme and ``://``
-    and a label carries neither, so ``wss://build.lan/session`` is an
+    and a label carries neither, so ``wss://build.lan/ws`` is an
     address and ``build-lan`` is a name. Anything in between — ``ws:/x``,
     ``//host`` — is a label, and looked up as one, which fails by naming
     the labels that do exist rather than by dialling something odd.
@@ -241,11 +241,11 @@ def _read_required(named: str, env: dict[str, str]) -> _ServerFile:
             f"name — and there is no {CONFIG_FILE} to look in.",
             location=Location(file=path),
             hint=(
-                f"either give the address itself (--server wss://host/session), or "
+                f"either give the address itself (--server wss://host/ws), or "
                 f"write that file:\n"
                 f'    default = "{named}"\n\n'
                 f"    [{SERVER_TABLE}.{named}]\n"
-                f'    {URL_KEY} = "wss://host:8443/session"\n'
+                f'    {URL_KEY} = "wss://host:8443/ws"\n'
                 f"A name has a scheme nowhere in it; an address always has one."
             ),
         )
@@ -275,7 +275,7 @@ def _read(path: Path) -> _ServerFile:
                 "else says:\n"
                 '    default = "home"\n\n'
                 f"    [{SERVER_TABLE}.home]\n"
-                f'    {URL_KEY} = "wss://build.lan:8443/session"'
+                f'    {URL_KEY} = "wss://build.lan:8443/ws"'
             ),
         ) from error
 
@@ -347,7 +347,7 @@ def _url_of(path: Path, label: str, table: dict[str, object]) -> str:
         raise ConfigError(
             f'The build server "{label}" has no {URL_KEY}.',
             location=Location(file=path, key=f"{SERVER_TABLE}.{label}"),
-            hint=f'add the address it is reachable at: {URL_KEY} = "wss://host:8443/session"',
+            hint=f'add the address it is reachable at: {URL_KEY} = "wss://host:8443/ws"',
         )
     if not isinstance(url, str) or not url.strip():
         key = f"{SERVER_TABLE}.{label}.{URL_KEY}"
@@ -357,7 +357,7 @@ def _url_of(path: Path, label: str, table: dict[str, object]) -> str:
             f'The build server "{label}" has an address without a scheme: "{url}".',
             location=Location(file=path, key=f"{SERVER_TABLE}.{label}.{URL_KEY}"),
             hint=(
-                f'write the whole address: {URL_KEY} = "wss://{url}/session" — "wss://" '
+                f'write the whole address: {URL_KEY} = "wss://{url}/ws" — "wss://" '
                 'for TLS, and "ws://" only on a network you own, because the token '
                 "travels on it"
             ),
@@ -476,7 +476,7 @@ def _refuse_unknown_label(configured: _ServerFile, label: str, *, by_default: bo
         location=Location(file=configured.path, key=f"{SERVER_TABLE}.{label}"),
         hint=(
             f"configured build servers: {_labels(configured)}. Add the table, fix the "
-            f"name, or give the address itself — --server wss://host/session."
+            f"name, or give the address itself — --server wss://host/ws."
         ),
     )
 
@@ -489,7 +489,7 @@ def _refuse_type(path: Path, key: str, expected: str, value: object) -> ConfigEr
             "one table per build server, and the label used when nothing else says:\n"
             '    default = "home"\n\n'
             f"    [{SERVER_TABLE}.home]\n"
-            f'    {URL_KEY} = "wss://build.lan:8443/session"'
+            f'    {URL_KEY} = "wss://build.lan:8443/ws"'
         ),
     )
 
