@@ -33,6 +33,52 @@ not change and the build log goes to stderr. `mcuhome --version`
 reports the *builder's* version — that is the number that determines
 what a build produces.
 
+## Build servers
+
+`mcuhome build --method remote` compiles on a build server. Which one is
+a ladder — the flag beats the environment, and the environment beats the
+configuration file:
+
+```sh
+mcuhome build <device> --method remote --server wss://host:8443/session --token <token>
+MCUHOME_BUILD_SERVER=wss://host:8443/session MCUHOME_BUILD_TOKEN=<token> mcuhome build …
+```
+
+For more than one server, name them once in
+`$XDG_CONFIG_HOME/mcuhome/build-servers.toml` (`~/.config/mcuhome/` on a
+normal Linux account):
+
+```toml
+default = "home"
+
+[server.home]
+url = "wss://build.lan:8443/session"
+
+[server.laptop]
+url = "ws://127.0.0.1:8080/session"
+```
+
+`--server` and `MCUHOME_BUILD_SERVER` then take a **label** as well as an
+address — `mcuhome build <device> --method remote --server laptop` — and
+`default` says which one a build that names none uses. A label is told
+from an address by its scheme: a URL has one, a label never does.
+
+Tokens are **not** in that file: each server's bearer token is its own
+file, `tokens/<label>` next to it, holding the token and nothing else.
+That keeps the file that names servers free of secrets, so it can be
+copied to another machine or pasted into a bug report. Write it
+owner-only — a token is a bearer credential, and MCUHome says so loudly
+when other accounts can read it:
+
+```sh
+(umask 177; printf %s '<token>' > ~/.config/mcuhome/tokens/home)
+```
+
+A label brings its token along automatically; `--token` and
+`MCUHOME_BUILD_TOKEN` override it, and a trailing newline in the file is
+ignored. The file is yours (or a dashboard's) — the command line only
+ever reads it.
+
 ## Development install
 
 Nothing is on PyPI yet (the repositories are private), so the `mcuhome`

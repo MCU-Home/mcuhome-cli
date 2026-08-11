@@ -57,12 +57,15 @@ node:
 
 @pytest.fixture(autouse=True)
 def _no_real_signing_key(monkeypatch, tmp_path):
-    """No test may touch the developer's own firmware signing key.
+    """No test may touch the developer's own MCUHome configuration.
 
-    ``mcuhome build`` generates one on first need under
+    ``mcuhome build`` generates a signing key on first need under
     ``$XDG_CONFIG_HOME/mcuhome/`` (mcuhome ADR 0015 decision 8), which on
-    the machine running this suite is a real, long-lived private key.
-    Point the variable at the test's own tmp_path instead.
+    the machine running this suite is a real, long-lived private key —
+    and since E63 the same directory holds this user's real build servers
+    (``build-servers.toml`` and their tokens), which a test resolving the
+    remote ladder would otherwise read. Point the variable at the test's
+    own tmp_path instead, so both are the test's.
     """
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
     monkeypatch.delenv("MCUHOME_SIGNING_KEY", raising=False)

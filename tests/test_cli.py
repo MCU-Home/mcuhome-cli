@@ -1456,10 +1456,10 @@ def test_the_method_ladder_falls_to_the_environment() -> None:
 def test_the_method_ladder_ends_at_the_local_container() -> None:
     """Rung 3 is the default, not a configuration file (E54).
 
-    E53 puts the last rung of this ladder under
-    ``$XDG_CONFIG_HOME/mcuhome/`` and names no file format for it, so this
-    implementation stops one rung short rather than inventing one — an
-    empty environment gets the decided default.
+    The configured file (E63) names build *servers*; no decision says a
+    build method may be read out of it, so this ladder stops one rung
+    short rather than inventing a key — an empty environment gets the
+    decided default.
     """
     assert cli._resolve_method(_build_args(), {}) == buildmethods.LOCAL
 
@@ -1494,7 +1494,145 @@ def test_the_server_ladder_takes_the_flag_then_the_variable() -> None:
     assert cli._remote_server(_build_args(), env) == ("ws://from-env/session", "env-token")
     args = _build_args(server="ws://from-flag/session", token="flag-token")
     assert cli._remote_server(args, env) == ("ws://from-flag/session", "flag-token")
+
+
+def test_the_server_ladder_falls_to_the_file_and_then_to_nothing(tmp_path) -> None:
+    """Rung 3 exists now (E63), and the rung below it is still "nothing".
+
+    This test used to pin "the ladder ends at the flag and the variable",
+    which was true only while ``$XDG_CONFIG_HOME/mcuhome/`` had no decided
+    file format. It has one: ``build-servers.toml`` plus a token file per
+    label. An environment that names neither still resolves to nothing —
+    that is what makes ``RemoteNotConfigured`` the refusal a user sees
+    rather than a server nobody chose.
+    """
+    config_home = tmp_path / "xdg"
+    directory = config_home / "mcuhome"
+    (directory / "tokens").mkdir(parents=True)
+    (directory / "build-servers.toml").write_text(
+        'default = "home"\n\n[server.home]\nurl = "wss://build.lan:8443/session"\n',
+        encoding="utf-8",
+    )
+    (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
+    (directory / "tokens" / "home").chmod(0o600)
+
+    env = {"XDG_CONFIG_HOME": str(config_home)}
+    assert cli._remote_server(_build_args(), env) == ("wss://build.lan:8443/session", "file-token")
+
+    # The rung above still wins, and a label reaches the file from it.
+    with_flag = _build_args(server="ws://from-flag/session", token="flag-token")
+    assert cli._remote_server(with_flag, env) == ("ws://from-flag/session", "flag-token")
+    assert cli._remote_server(_build_args(server="home"), env) == (
+        "wss://build.lan:8443/session",
+        "file-token",
+    )
+
+    # And with no file anywhere, the ladder ends where it always did.
     assert cli._remote_server(_build_args(), {}) == (None, None)
+
+
+def test_a_configured_label_reaches_the_remote_method_with_its_token(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """The rung, end to end: ``--server home`` builds against home's url.
+
+    The file rung is only worth anything if what it resolves arrives in
+    the request the method receives, so that is what is asserted — the
+    url out of the table and the token out of ``tokens/home``, neither of
+    which appears anywhere on the command line.
+    """
+    config_home = tmp_path / "xdg"
+    directory = config_home / "mcuhome"
+    (directory / "tokens").mkdir(parents=True)
+    (directory / "build-servers.toml").write_text(
+        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+    )
+    (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
+    (directory / "tokens" / "home").chmod(0o600)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    seen: list[buildmethods.BuildRequest] = []
+
+    async def refuse(request, *, method):
+        seen.append(request)
+        raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
+
+    monkeypatch.setattr(cli.api, "run_build", refuse)
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv += ["--server", "home", "--sdk-source", str(tmp_path)]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/session", "file-token")
+
+
+def test_an_unknown_label_is_a_refusal_listing_the_configured_ones(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """A label is looked up, never dialled — so a typo names the real ones."""
+    directory = tmp_path / "xdg" / "mcuhome"
+    directory.mkdir(parents=True)
+    (directory / "build-servers.toml").write_text(
+        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+    )
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    assert main(argv + ["--server", "hoem"]) == 1
+    err = capsys.readouterr().err
+    assert "hoem" in err
+    assert "home" in err
+    assert "Traceback" not in err
+
+
+def test_a_broken_server_file_stops_a_remote_build_and_no_other(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """The file is the remote method's configuration, and only its.
+
+    A local build compiles in a container on this machine and never opens
+    a socket, so a typo in ``build-servers.toml`` has no business stopping
+    it — the file is not even read there.
+    """
+    directory = tmp_path / "xdg" / "mcuhome"
+    directory.mkdir(parents=True)
+    (directory / "build-servers.toml").write_text("this is not TOML {{{\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert "not valid TOML" in err
+    assert "build-servers.toml" in err
+
+    signed = _capture_signing(monkeypatch)
+    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path / "local")]) == 0
+    assert [call["device"] for call in signed] == ["bmp180-node"]
+
+
+def test_a_group_readable_token_warns_on_stderr(tmp_path, capsys, monkeypatch) -> None:
+    """Loudly, and never on stdout — in --json mode that belongs to the document."""
+    config_home = tmp_path / "xdg"
+    directory = config_home / "mcuhome"
+    (directory / "tokens").mkdir(parents=True)
+    (directory / "build-servers.toml").write_text(
+        '[server.home]\nurl = "wss://build.lan:8443/session"\n', encoding="utf-8"
+    )
+    (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
+    (directory / "tokens" / "home").chmod(0o644)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+
+    async def refuse(request, *, method):
+        raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
+
+    monkeypatch.setattr(cli.api, "run_build", refuse)
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv += ["--server", "home", "--sdk-source", str(tmp_path), "--json"]
+    assert main(argv) == 1
+    captured = capsys.readouterr()
+    assert "Warning:" in captured.err
+    assert "chmod 600" in captured.err
+    assert "Warning" not in captured.out
+    json.loads(captured.out)
 
 
 def test_remote_without_a_server_refuses_and_names_the_two_knobs(

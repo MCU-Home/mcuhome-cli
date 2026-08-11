@@ -42,6 +42,14 @@ bytes afterwards and checks them against it. ``--server``/``--token``
 (:data:`SERVER_VAR`, :data:`TOKEN_VAR`) are the ``remote`` method's own
 rungs, and ``--image`` the ``local`` method's.
 
+The ``remote`` ladder has a third rung the others do not:
+``$XDG_CONFIG_HOME/mcuhome/build-servers.toml`` names build servers, one
+table per label, with a ``default`` for the run that says nothing — and
+``--server`` takes such a label just as well as a URL, which is what
+makes several build servers a thing a user configures once instead of
+retypes (:mod:`mcuhome_cli.servers`, E63). Tokens live beside it, one
+file per label, so the file that names servers carries no secret.
+
 ``validate`` and ``build`` take ``--json``, which replaces the whole
 human rendering with one machine-readable document on stdout — the
 resolved model or the build manifest on success, the errors of
@@ -102,6 +110,8 @@ from mcuhome.workbench import (
 )
 from mcuhome.workbench import tree as tree_module
 from mcuhome.workbench.tree import ConfigTree, resolve_device
+
+from mcuhome_cli import servers
 
 __all__ = [
     "BUILD_DIR",
@@ -481,10 +491,12 @@ def _resolve_method(args: argparse.Namespace, env: dict[str, str]) -> str:
     The ladder E53 fixed for the remote server address, applied to the
     method itself: an explicit flag beats the environment, and the
     environment beats the default, which is the local build container
-    (E54). E53's third rung — a file under ``$XDG_CONFIG_HOME/mcuhome/`` —
-    is deliberately **not** implemented here: the decision names the
-    directory and no file format, and inventing one would fix a
-    configuration surface that has not been decided.
+    (E54). The file rung stops at the server address: E63 decided what
+    ``build-servers.toml`` says, and it says which build *servers* exist —
+    not which method a build uses. Reading a method out of it (or adding a
+    key to it for one) would settle a configuration surface no decision
+    has settled, so an unanswered ladder ends at the decided default
+    instead.
 
     ``--method <name>`` is the only spelling of a method (E62). The host
     method once had a flag of its own, ``--native``, from before the
@@ -504,18 +516,32 @@ def _resolve_method(args: argparse.Namespace, env: dict[str, str]) -> str:
 
 
 def _remote_server(args: argparse.Namespace, env: dict[str, str]) -> tuple[str | None, str | None]:
-    """Build server and token: flag, then variable, then nothing (E53).
+    """Build server and token: flag, then variable, then the file (E53/E63).
 
-    The same two rungs as the method above, and the same missing third —
-    ``$XDG_CONFIG_HOME/mcuhome/`` is where E53 puts the last one, and what
-    a file there is called and contains is undecided. A ``remote`` build
-    with neither rung answered is refused by
-    :class:`~mcuhome.workbench.api.RemoteNotConfigured`, which
-    names both knobs, rather than defaulted to a server nobody chose.
+    All three rungs of E53's ladder, and the last one is
+    :mod:`mcuhome_cli.servers` — ``build-servers.toml`` and one token file
+    per label under ``$XDG_CONFIG_HOME/mcuhome/``. The rung above always
+    wins, whichever way the one below it would have answered: a
+    ``--token`` beside a label is used and the label's token file is not
+    even opened.
+
+    ``--server`` and the variable take **a label or a URL** (E63), which
+    is what makes the third rung reachable from the first two rather than
+    only from an empty command line — a label is looked up, and it brings
+    its token with it. A ``remote`` build that no rung answers is refused
+    by :class:`~mcuhome.workbench.api.RemoteNotConfigured`, which names
+    all three, rather than defaulted to a server nobody chose.
+
+    Warnings — an unknown key in the file, a token file other accounts can
+    read — go to stderr and never to stdout, which in ``--json`` mode
+    belongs to the document.
     """
-    server = getattr(args, "server", None) or env.get(SERVER_VAR) or None
+    named = getattr(args, "server", None) or env.get(SERVER_VAR) or None
     token = getattr(args, "token", None) or env.get(TOKEN_VAR) or None
-    return server, token
+    resolution = servers.resolve(named, token=token, env=env)
+    for warning in resolution.warnings:
+        print(warning, file=sys.stderr)
+    return resolution.url, resolution.token
 
 
 def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
@@ -760,7 +786,10 @@ def _build_delivered(
     resolved_jobs = workspace.resolve_jobs(env=env, cli_jobs=args.jobs)
     remote = method == api.REMOTE
     reference = "" if remote else container.image_reference(env, override=args.image)
-    server, token = _remote_server(args, env)
+    # Only the method that uses a build server reads its configuration: a
+    # typo in build-servers.toml is not allowed to stop a build that
+    # compiles in a container on this machine and never opens a socket.
+    server, token = _remote_server(args, env) if remote else (None, None)
 
     if not as_json:
         print()
@@ -1536,15 +1565,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_parser_.add_argument(
         "--server",
-        metavar="URL",
+        metavar="URL|LABEL",
         default=None,
-        help=(f"build server the {api.REMOTE} method talks to ({SERVER_VAR} sets it too)"),
+        help=(
+            f"build server the {api.REMOTE} method talks to: an address, or the "
+            f"label of one configured in {servers.CONFIG_FILE} (which brings its "
+            f"token with it); {SERVER_VAR} sets it too"
+        ),
     )
     build_parser_.add_argument(
         "--token",
         metavar="TOKEN",
         default=None,
-        help=f"bearer token for that build server ({TOKEN_VAR} sets it too)",
+        help=(
+            f"bearer token for that build server ({TOKEN_VAR} sets it too; a "
+            f"configured label reads {servers.TOKENS_DIR}/<label> instead)"
+        ),
     )
     build_parser_.add_argument(
         "--image",
