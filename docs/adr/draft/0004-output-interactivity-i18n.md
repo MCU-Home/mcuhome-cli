@@ -56,14 +56,30 @@ human rendering; logs, warnings and rendered errors go to stderr.
 Machine documents never contain localized text in structural positions
 (keys, verbs, codes).
 
-### 3. Interactivity
+### 3. Interactivity: interact → validate → execute
 
 Default: auto-detected — interactive when attached to a TTY, otherwise
 non-interactive. `--interactive` / `--no-interactive` override the
-detection; `-o json` and `-o json-stream` force non-interactive. In
-interactive mode the CLI may prompt for missing required inputs. In
-non-interactive mode a missing required input is an immediate failure
-**before anything is written anywhere**, with exit code 2.
+detection; `-o json` and `-o json-stream` force non-interactive.
+
+Every command runs in three phases, in this order and with this
+contract (PO 2026-08-14):
+
+1. **interact** — runs only in interactive mode, and **at application
+   start**: every question the command will need answered is asked and
+   answered up front, never scattered through the run.
+2. **validate** — checks that every required input is present and
+   valid, wherever it came from (arguments, environment,
+   configuration, or the interact phase). Any gap ends the process
+   here with exit code 2.
+3. **execute** — the actual action. It is **never invoked** when
+   validate failed: the boundary is not "before anything is written"
+   but sharper — the action does not start at all.
+
+In non-interactive mode the interact phase is skipped entirely, so a
+missing required input is an immediate exit-2 refusal in validate.
+The three phases are the *contract*, not a prescribed class layout —
+how a command implements them is its own business.
 
 ### 4. Exit codes
 
