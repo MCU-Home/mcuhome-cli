@@ -44,5 +44,5 @@ draft.
 |---|---|
 | [0001](draft/0001-record-cli-decisions-here.md) | Record CLI decisions in this repository |
 | [0002](draft/0002-the-thin-shell-and-its-packaging.md) | The thin shell and its packaging |
-| [0003](draft/0003-command-vocabulary-and-output-contract.md) | Command vocabulary and output contract |
-| [0004](draft/0004-configuration-ladders.md) | Configuration ladders: method, server, SDK sources |
+| [0003](draft/0003-command-vocabulary.md) | Command vocabulary |
+| [0004](draft/0004-output-interactivity-i18n.md) | Output, interactivity, internationalization |

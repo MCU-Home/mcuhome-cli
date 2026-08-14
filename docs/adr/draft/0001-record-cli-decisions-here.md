@@ -51,4 +51,4 @@ block).
   workbench/CLI seam of each mechanism is stated explicitly in the
   drafts here.
 - Superseded dashboard ADR 0011 remains frozen history; its live CLI
-  content now lives here (draft 0003).
+  content now lives here (drafts 0003/0004).
