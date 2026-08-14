@@ -1886,8 +1886,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "ECDSA P-256 private key to sign the firmware with, as a plain PEM file "
             f"(the {signing.KEY_VAR} environment variable sets it too). Default: the "
-            f"project's secrets/firmware/mcuboot.yaml under `{signing.FIRMWARE_KEY}`, "
-            "generated there on first use (draft ADR 0015 §8)"
+            f"project's secrets/firmware/{signing.PRIVATE_KEY_FILE}, generated on "
+            "first use and referenced from mcuboot.yaml (draft ADR 0015 §8)"
         ),
     )
     build_parser_.add_argument(
@@ -1941,8 +1941,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "ECDSA P-256 private key to sign with, as a plain PEM file (the "
             f"{signing.KEY_VAR} environment variable sets it too; default: the "
-            "project's secrets/firmware/mcuboot.yaml). Never generated here: a build "
-            "has to be signed with the key its device's bootloader already carries."
+            f"project's secrets/firmware/{signing.PRIVATE_KEY_FILE}). Never generated "
+            "here: a build has to be signed with the key its device's bootloader "
+            "already carries."
         ),
     )
     add_common_options(sign_parser)
@@ -1966,7 +1967,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help=(
             "which key to take the public half of (default: the project's "
-            "secrets/firmware/mcuboot.yaml)"
+            f"secrets/firmware/{signing.PRIVATE_KEY_FILE})"
         ),
     )
     add_common_options(public_key_parser)

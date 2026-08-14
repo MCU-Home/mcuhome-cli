@@ -1251,8 +1251,8 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
     The container gets the **public** key and nothing else: the private key
     is never one of the arguments the build backend is handed, and what it
     *is* handed for the key is a public key. Run inside a real project, so
-    the key under test is the per-project one (ADR 0015 §8) — generated
-    into ``secrets/firmware/mcuboot.yaml`` by this very build, and still
+    the key under test is the per-project one (ADR 0015 §8) — generated as
+    ``secrets/firmware/mcuboot.pem`` by this very build, and still
     absent from everything the backend received, path and value alike.
     The docker-argv half of the same invariant is asserted against the
     real backend in the workbench's own ``test_localbuild.py``.
@@ -1276,11 +1276,14 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
     assert main(argv) == 0
 
     # The per-project key was generated on first need — the human header
-    # says so loudly — and yet nothing the backend received names or
-    # contains it.
+    # says so loudly, naming the key file itself — and yet nothing the
+    # backend received names or contains it. Two files since the !file
+    # shape (draft ADR 0015 §8): mcuboot.pem is the material,
+    # mcuboot.yaml references it.
     out = capsys.readouterr().out
-    key_home = project / "secrets" / "firmware" / "mcuboot.yaml"
+    key_home = project / "secrets" / "firmware" / "mcuboot.pem"
     assert key_home.is_file()
+    assert (project / "secrets" / "firmware" / "mcuboot.yaml").is_file()
     assert str(key_home) in out
     assert "NEW" in out
     everything = " ".join(str(value) for value in handed.values())
