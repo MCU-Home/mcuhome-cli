@@ -17,15 +17,20 @@ library. Programs never use this shell: they embed
 `mcuhome.workbench.api`, the supported programmatic surface.
 
 ```
-mcuhome init         [dir]         # create a project directory
-mcuhome new          <device>      # scaffold a device folder
-mcuhome validate     <device>      # stages 1-3, prints a summary
-mcuhome build        <device>      # stages 1-5, a flashable image
-mcuhome sign         <build-dir>   # apply the signature afterwards
-mcuhome init-pairing <device>      # draw commissioning credentials
-mcuhome public-key                 # the public half of the signing key
-mcuhome schema       [what]        # the schema and the registry, as JSON
-mcuhome clean        <device|--all>
+mcuhome init               [dir]         # create a project directory
+mcuhome config             [print|get|set|unset]  # read/write configuration values
+mcuhome device new         <device>      # scaffold a device folder
+mcuhome device validate    <device>      # stages 1-3, prints a summary
+mcuhome device build       <device>      # stages 1-5, a flashable image
+mcuhome device sign-firmware <device|path>   # apply the signature afterwards
+mcuhome device init-pairing <device>    # draw commissioning credentials
+mcuhome device list                     # list project devices with status
+mcuhome public-key                      # the public half of the signing key
+mcuhome schema             [config|registry]  # the schema and the registry, as JSON
+mcuhome doctor                          # environment diagnosis
+mcuhome device flash       <device>      # flash the last built/signed firmware (stub)
+mcuhome device first-time-setup <device> # one-time board provisioning (stub)
+mcuhome clean              <device|--all> # remove build output (stub)
 ```
 
 Commands run inside an MCUHome **project directory** (ADR 0022): a
@@ -37,8 +42,9 @@ secrets under `secrets/` (mode 700, kept out of git by the generated
 `secrets/firmware/mcuboot.yaml`, generated on first need
 (`--signing-key`/`MCUHOME_SIGNING_KEY` override it with a plain PEM
 file). Options like `--sdk-sources` and `--jobs` resolve through the
-five configuration layers of ADR 0022 (defaults, system, user, project,
-environment, command line), each value knowing where it came from.
+five configuration layers of ADR 0022 (defaults, system, user,
+project, environment, command line), each value knowing where it came
+from — `mcuhome config print` shows the resolved tree.
 
 `-o json` emits one machine-readable document on stdout after the run;
 `-o json-stream` emits NDJSON as the run progresses (verbs `start`,
@@ -49,57 +55,33 @@ build log goes to stderr, and both machine forms are non-interactive.
 `--color auto|always|never` follows the `NO_COLOR` convention.
 `mcuhome --version` reports the whole stack, one line per part.
 
-## Build servers
+## Build servers and builders
 
-> **Transitional.** This whole section retires with the command
-> vocabulary step (cli ADR 0003): named builders configured per ADR
-> 0023 — with credentials in `secrets/build-server/<name>.yaml` —
-> replace `--method`/`--server`/`--token`, `MCUHOME_BUILD_*`,
-> `build-servers.toml` and `tokens/<label>` without aliases.
-
-`mcuhome build --method remote` compiles on a build server. Which one is
-a ladder — the flag beats the environment, and the environment beats the
-configuration file:
+Where a build runs is a **builder** (ADR 0023): configuration about a
+build method, declared once in any configuration layer and selected
+per invocation — the configured `default_builder`, an explicit
+`--builder NAME`, or the fully manual `--build-mode` rung that
+bypasses the list for a one-off build:
 
 ```sh
-mcuhome build <device> --method remote --server wss://host:8443/session --token <token>
-MCUHOME_BUILD_SERVER=wss://host:8443/session MCUHOME_BUILD_TOKEN=<token> mcuhome build …
+mcuhome device build <device>                   # the configured default builder
+mcuhome device build <device> --builder attic   # a named builder
+mcuhome device build <device> --build-mode remote \
+  --build-server wss://host:8443/session --build-token <token>
 ```
 
-For more than one server, name them once in
-`$XDG_CONFIG_HOME/mcuhome/build-servers.toml` (`~/.config/mcuhome/` on a
-normal Linux account):
-
-```toml
-default = "home"
-
-[server.home]
-url = "wss://build.lan:8443/session"
-
-[server.laptop]
-url = "ws://127.0.0.1:8080/session"
+```yaml
+# mcuhome.yaml (or the user/system configuration.yaml)
+builders:
+  - name: attic
+    type: remote            # local | local-dev | remote
+    server: wss://build.lan:8443/session
+default_builder: attic
 ```
 
-`--server` and `MCUHOME_BUILD_SERVER` then take a **label** as well as an
-address — `mcuhome build <device> --method remote --server laptop` — and
-`default` says which one a build that names none uses. A label is told
-from an address by its scheme: a URL has one, a label never does.
-
-Tokens are **not** in that file: each server's bearer token is its own
-file, `tokens/<label>` next to it, holding the token and nothing else.
-That keeps the file that names servers free of secrets, so it can be
-copied to another machine or pasted into a bug report. Write it
-owner-only — a token is a bearer credential, and MCUHome says so loudly
-when other accounts can read it:
-
-```sh
-(umask 177; printf %s '<token>' > ~/.config/mcuhome/tokens/home)
-```
-
-A label brings its token along automatically; `--token` and
-`MCUHOME_BUILD_TOKEN` override it, and a trailing newline in the file is
-ignored. The file is yours (or a dashboard's) — the command line only
-ever reads it.
+A remote builder's bearer token lives next to the other secrets, in
+`secrets/build-server/<name>.yaml` (`token: …`, owner-only) — the
+committed configuration names servers and never carries a credential.
 
 ## Development install
 
