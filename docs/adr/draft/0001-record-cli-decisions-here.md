@@ -23,7 +23,7 @@ the repositories that did carry the records are the wrong owners.
 
 CLI design decisions are recorded as ADRs in this repository,
 following the project-wide draft-first lifecycle of
-[firmware ADR 0021](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md):
+[ADR 0021](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md):
 drafts in `docs/adr/draft/` are living documents; a final ADR is
 written from the real result once the component is done, and is then
 immutable.

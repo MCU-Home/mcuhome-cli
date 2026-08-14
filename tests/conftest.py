@@ -3,9 +3,9 @@
 """Shared fixtures for the CLI behavior tests.
 
 The example configuration and the fixture tree are copies of the ones in
-the mcuhome repository (``docs/design/examples/`` and
+the mcuhome-sdk repository (``docs/design/examples/`` and
 ``tests_py/data/tree/``): the CLI tests exercise the command surface over
-a real configuration without reaching into the library repo's checkout.
+a real configuration without reaching into the SDK repo's checkout.
 """
 
 from __future__ import annotations

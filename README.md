@@ -81,12 +81,19 @@ ever reads it.
 
 ## Development install
 
-Nothing is on PyPI yet (the repositories are private), so the `mcuhome`
-dependency comes from a sibling checkout. From this repository's root,
-with `mcuhome` cloned next to it:
+Nothing is on PyPI yet, so the `mcuhome-workbench` dependency and the
+SDK distributions behind its `local` extra come from sibling checkouts
+(ADR 0024 split: [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)
+carries the workbench,
+[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) the
+model and the compiler). From this repository's root, with both cloned
+next to it — one invocation, so pip resolves the sibling pins against
+the copies being installed:
 
 ```sh
-pip install -e ../mcuhome
+pip install -e ../mcuhome-sdk/packaging/model \
+            -e ../mcuhome-sdk/packaging/compiler \
+            -e '../mcuhome[remote,local]'
 pip install -e '.[dev]'
 ```
 

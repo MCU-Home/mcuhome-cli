@@ -20,7 +20,7 @@ repository. Project-wide decisions live in
 ## Lifecycle: draft first, final when real
 
 ADRs follow the project-wide draft-first lifecycle of
-[firmware ADR 0021](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md):
+[ADR 0021](https://github.com/mcu-home/mcuhome/blob/main/docs/adr/0021-draft-first-adr-lifecycle.md):
 an ADR starts in [`draft/`](draft/) as a **living document** — while
 the component it decides about is being built, changes land as better
 text, never as amendment or erratum sections; git history is the

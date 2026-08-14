@@ -46,7 +46,7 @@ REPORT = {
 
 
 def _fake_local_run(model, **kwargs):
-    """A stand-in for run_local_build: the files a container delivers, no docker.
+    """A stand-in for compose_local_build: the files a container delivers, no docker.
 
     Writes the unsigned firmware and the §7.2.1 build report into the
     per-invocation ``out`` the real backend would, and answers a successful
@@ -81,7 +81,12 @@ def _fake_local_run(model, **kwargs):
         out=out,
     )
     return localbuild.LocalBuildResult(
-        outcome=outcome, out_dir=out, context_dir=work_root / "context", image=kwargs["image"]
+        outcome=outcome,
+        out_dir=out,
+        context_dir=work_root / "context",
+        # `image` is None unless the build named one, exactly as the real
+        # composition receives it before resolving the default.
+        image=kwargs["image"] or container.IMAGE,
     )
 
 
@@ -436,7 +441,7 @@ def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     image plus the §7.2.1 report, and the host signs it — one command to a
     flashable image, with the private key never in a container.
     """
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     monkeypatch.setattr(
         workspace, "plan_build", lambda **kwargs: pytest.fail("the local-dev path ran by default")
     )
@@ -468,7 +473,7 @@ def test_the_local_build_prints_the_footprint_from_the_report(
     tmp_path, capsys, monkeypatch
 ) -> None:
     """The memory table comes from the container's report, not a host log."""
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
@@ -484,7 +489,7 @@ def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None
         seen["image"] = kwargs["image"]
         return _fake_local_run(model, **kwargs)
 
-    monkeypatch.setattr(localbuild, "run_local_build", capture)
+    monkeypatch.setattr(buildmethods, "compose_local_build", capture)
     _fake_imgtool(monkeypatch, tmp_path)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--image", "localhost/b:wip"]
     assert main(argv) == 0
@@ -501,7 +506,7 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
             hint="pull or build the image, or point --image at one",
         )
 
-    monkeypatch.setattr(localbuild, "run_local_build", refuse)
+    monkeypatch.setattr(buildmethods, "compose_local_build", refuse)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
     captured = capsys.readouterr()
@@ -942,7 +947,7 @@ def test_no_sign_local_stops_at_the_unsigned_image(tmp_path, capsys, monkeypatch
     flashable yet" state the detached workflow expects. The build report is
     what a second machine signs from.
     """
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     out_dir = tmp_path / "out"
 
     assert (
@@ -971,7 +976,7 @@ def test_no_sign_local_stops_at_the_unsigned_image(tmp_path, capsys, monkeypatch
 
 def test_no_sign_local_still_needs_a_public_key(tmp_path, capsys, monkeypatch) -> None:
     """The bootloader needs the public key even when the build never signs."""
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 1
     assert "mcuhome public-key" in capsys.readouterr().err
 
@@ -987,7 +992,7 @@ def test_a_no_sign_rebuild_drops_a_prior_signed_image_and_ota(
     unsigned firmware, while the CLI reports nothing flashable — a
     boot-bricking lookalike. The rebuild drops them.
     """
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     out_dir = tmp_path / "out"
 
     # A first build that signs on the host: firmware.signed.* and an .ota land.
@@ -1024,7 +1029,7 @@ def test_a_no_sign_rebuild_drops_a_prior_signed_image_and_ota(
 
 def test_sign_reads_a_build_report_directory(tmp_path, capsys, monkeypatch) -> None:
     """`mcuhome sign` on the container backend's delivery uses the §7.2.1 report."""
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     out_dir = tmp_path / "out"
     main(
         [
@@ -1115,7 +1120,7 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
         handed.update(kwargs)
         return _fake_local_run(model, **kwargs)
 
-    monkeypatch.setattr(localbuild, "run_local_build", record)
+    monkeypatch.setattr(buildmethods, "compose_local_build", record)
     _fake_imgtool(monkeypatch, tmp_path)
 
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
@@ -1604,7 +1609,7 @@ def test_a_broken_server_file_stops_a_remote_build_and_no_other(
     assert "build-servers.toml" in err
 
     signed = _capture_signing(monkeypatch)
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path / "local")]) == 0
     assert [call["device"] for call in signed] == ["bmp180-node"]
 
@@ -1714,7 +1719,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     """E56: one host-side signing step, reached identically by all three.
 
     Each method is stubbed at its own backend seam — the west build for
-    ``local-dev``, ``run_local_build`` for ``local``, and the dispatch
+    ``local-dev``, ``compose_local_build`` for ``local``, and the dispatch
     itself for ``remote``, whose real composition (a session against a
     build server) is tested in the library's own suite. What is asserted
     is the same thing for all three: the signing step ran exactly once, on
@@ -1738,7 +1743,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     assert main(argv) == 0
 
     # local, through the real dispatch onto a stubbed container backend.
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     local_dir = tmp_path / "local"
     assert main(["build", str(EXAMPLE), "--build-dir", str(local_dir)]) == 0
 
@@ -1802,7 +1807,7 @@ def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeyp
 
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
-    monkeypatch.setattr(localbuild, "run_local_build", _fake_local_run)
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     for extra in (["--method", "local-dev"], []):
         argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out")]
         argv += ["--no-sign", "--public-key", str(public), *extra]
