@@ -53,6 +53,7 @@ __all__ = [
     "JSON_STREAM",
     "MODES",
     "Output",
+    "format_table",
     "resolve",
 ]
 
@@ -69,6 +70,24 @@ RED = "31"
 GREEN = "32"
 YELLOW = "33"
 BOLD = "1"
+
+
+def format_table(rows: Sequence[Sequence[str]]) -> str:
+    """Aligned columns, two spaces apart — the one table style (ADR 0004 §1).
+
+    Plain text in, plain text out: cells must not carry escape codes,
+    because alignment counts characters. A caller that wants color
+    styles the finished line.
+    """
+    if not rows:
+        return ""
+    columns = max(len(row) for row in rows)
+    widths = [max((len(row[i]) for row in rows if i < len(row)), default=0) for i in range(columns)]
+    lines = []
+    for row in rows:
+        cells = (text.ljust(widths[i]) for i, text in enumerate(row))
+        lines.append("  ".join(cells).rstrip())
+    return "\n".join(lines)
 
 
 def resolve(

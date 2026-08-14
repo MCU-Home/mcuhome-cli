@@ -91,11 +91,63 @@ depends on the spellings — the E62 rule):
   had no way to a first project. Everything else in §2 lands as its own
   step.
 
+## Pinned during implementation (C2, 2026-08-14)
+
+The whole of §2 and §4 landed as one step. What the table left open:
+
+- **The `-o` collision** (PO decision 2026-08-14): `schema` and
+  `public-key` lost their `-o PATH` spelling without replacement —
+  their document goes to stdout, which per ADR 0004 *is* the file API
+  (`mcuhome public-key > signing.pub`). `-o` means the output format
+  everywhere it exists, and nothing else, anywhere.
+- **Mode-specific `device build` flags**: `--build-server` and
+  `--build-token` (remote), `--workspace` (local-dev; optional — the
+  discovery from the install location and the working directory stays
+  the default), `--image` (local). The rungs do not mix: a mode flag
+  without `--build-mode` — or beside the wrong mode, or `--builder`
+  together with `--build-mode`, or `--build-mode remote` without
+  `--build-server` — is an exit-2 refusal in the validate phase, and
+  the build never starts. `--build-mode` itself is an argparse choice
+  of the three method names, so a typo is exit 2 too.
+- `device sign-firmware` takes a device name (signs that device's last
+  build, `<project>/build/<device>/`) *or* a path — a build directory
+  or one of the two report files — for the detached workflow, which
+  owns no project. A path that is a build wins over a device sharing
+  its spelling; an existing path that is neither is refused with what a
+  sign target must hold.
+- `config` verbs: `print` (the resolved tree, per-option origin; the
+  per-builder defining layer included), `get NAME`, `set NAME VALUE`,
+  `unset NAME`. The scope flags sit on `set`/`unset` only, default
+  `--project`; writes go through the workbench
+  (`set_config_value`/`unset_config_value`, ADR 0022) — round-trip
+  edited, so comments and `!file` references survive. List-valued
+  options split `os.pathsep`-style on `set`, like their environment
+  variable; `builders` is refused toward the file's own `builders:`
+  list.
+- `device list` columns: device, board, status (`ok` / *n problems*),
+  build (`-` / `unsigned` / `signed`). The board falls back to the raw
+  YAML when the device does not validate — one drawn credential away
+  from valid still names its board. Build state reads both report
+  shapes (E55).
+- `doctor` checks, in order: stack (versions), project, configuration
+  (resolves), builders (list + default resolvable; credential warnings
+  surface here), container (docker, daemon, image — the compiler's own
+  preflight), secrets (permission walk). Any `fail` exits 1; warnings
+  alone exit 0.
+- The stubs (`device flash`, `device first-time-setup`, `clean`)
+  refuse as typed errors naming the plan — exit 1, uniform rendering,
+  never a silent no-op.
+- `device new --name NAME` writes the starter's `friendly_name`
+  (quoted); the default stays the title-cased device name. Emitting it
+  into the Matter identity remains the generator's work item.
+- §4 executed in the same step: `mcuhome_cli.servers`,
+  `build-servers.toml`, `tokens/<label>`, `MCUHOME_BUILD_*` and the
+  `--method`/`--server`/`--token` spellings are gone; user-facing
+  texts in all repos (hints, docstrings, scaffold) speak this ADR's
+  vocabulary.
+
 ## Open points
 
 - `device init-pairing` naming (keep, or fold under a future
   credentials noun) — revisit when secrets tooling grows.
 - `clean` semantics (what exactly is removed, per builder type).
-- Mode-specific `device build` flags beyond
-  `--build-mode`/`--build-server`/`--build-token` are pinned during
-  implementation.

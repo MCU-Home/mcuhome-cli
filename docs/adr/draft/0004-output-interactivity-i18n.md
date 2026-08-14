@@ -144,6 +144,31 @@ keys — is never translated.
 - Colors in C1 are infrastructure plus first uses (error first line,
   warning prefix, the NEW-key note); the uniform rendering layer of §1
   is the vocabulary step's companion work.
+
+## Pinned during implementation (C2, 2026-08-14)
+
+- The `-o PATH` collision is resolved (PO 2026-08-14): the old
+  file-writing spelling on `schema`/`public-key` retired without a
+  replacement flag — stdout is the document channel (§2), and writing
+  a file is a shell redirect. `-o` selects the output format on every
+  command that has machine output (`device validate`, `device build`,
+  `device list`, `config *`, `doctor`) and means nothing else anywhere.
+- §1's one table style is `mcuhome_cli.output.format_table` — plain
+  cells, aligned columns, two spaces apart; a caller that wants color
+  styles the finished line (alignment counts characters). `device
+  list` and `config print` render through it; `doctor` styles its
+  status column the same way the error renderer styles its first line
+  (green/yellow/red, bold).
+- New machine documents, all `{"ok": ...}`-shaped like the existing
+  two: `config print` (`config`: per-option value/origin/source),
+  `config get`/`set`/`unset` (the one option, the file), `device list`
+  (`devices`: name/board/ok/problems/built/signed), `doctor`
+  (`checks`: check/status/detail; `ok` is "no check failed"). Stream
+  `start` tasks: `config-print`, `config-get`, `config-set`,
+  `config-unset`, `list`, `doctor`.
+- i18n: the C2-rebuilt command texts go through `_()`; rendering-heavy
+  data lines (paths, tables, key-value dumps) stay unwrapped — they
+  carry no prose to translate.
 - Interactivity detection: stdin **and** stdout must be TTYs; no command
   asks questions yet, so the interact phase is empty everywhere — the
   contract and its forcing rules are in place and tested.

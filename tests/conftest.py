@@ -94,9 +94,7 @@ def _no_real_user_environment(monkeypatch, tmp_path):
         "MCUHOME_PROJECT_DIR",
         "MCUHOME_SDK_SOURCES",
         "MCUHOME_JOBS",
-        "MCUHOME_BUILD_METHOD",
-        "MCUHOME_BUILD_SERVER",
-        "MCUHOME_BUILD_TOKEN",
+        "MCUHOME_DEFAULT_BUILDER",
         "NO_COLOR",
     ):
         monkeypatch.delenv(variable, raising=False)

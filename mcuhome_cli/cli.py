@@ -11,42 +11,46 @@ surface.
 
 ::
 
-    mcuhome init         [dir]         # create a project directory
-    mcuhome new          <device>      # scaffold a device folder
-    mcuhome validate     <device>      # stages 1-3, prints a summary
-    mcuhome build        <device>      # stages 1-5
-    mcuhome sign         <build-dir>   # apply the signature afterwards
-    mcuhome init-pairing <device>      # draw commissioning credentials
-    mcuhome public-key                 # the public half of the signing key
-    mcuhome schema       [what]        # the schema and the registry, as JSON
-    mcuhome clean        <device|--all>
+    mcuhome init             [dir]       # create a project directory
+    mcuhome config           <verb>      # print/get/set/unset configuration
+    mcuhome device new       <device>    # scaffold a device folder
+    mcuhome device validate  <device>    # stages 1-3, prints a summary
+    mcuhome device build     <device>    # stages 1-5
+    mcuhome device sign-firmware <t>     # apply the signature afterwards
+    mcuhome device flash     <device>    # stub (cli ADR 0003)
+    mcuhome device first-time-setup <d>  # stub (cli ADR 0003)
+    mcuhome device init-pairing <device> # draw commissioning credentials
+    mcuhome device list                  # the project's devices, with state
+    mcuhome public-key                   # the public half of the signing key
+    mcuhome schema           [what]      # the schema and the registry, as JSON
+    mcuhome doctor                       # environment diagnosis
+    mcuhome clean            <device|--all>   # stub
 
-``clean`` exists so the surface is stable and refuses cleanly rather than
-being missing; everything else is implemented. These are still the
-as-grown command names — the decided vocabulary (cli ADR 0003: the
-``device`` noun, ``--build-mode``, builder selection) lands as its own
-step, together with the retirement of ``--method``/``--server``/
-``--token`` and :mod:`mcuhome_cli.servers`. What *is* already this
-module's decided shape: the project model under every ``<device>``
-argument (ADR 0022 — ``--project-dir``/``MCUHOME_PROJECT_DIR`` and the
-upward marker search), the option registry behind ``--sdk-sources`` and
-``--jobs`` (five layers, ``mcuhome.workbench.api.resolve_settings``),
-per-project signing keys (``secrets/firmware/mcuboot.yaml``, draft ADR
-0015 §8), and the output contract of cli ADR 0004
-(:mod:`mcuhome_cli.output`, :mod:`mcuhome_cli.phases`,
-:mod:`mcuhome_cli.i18n`).
+This is the decided vocabulary of cli ADR 0003: device-scoped
+operations under the ``device`` noun, project- and environment-scoped
+commands top-level, names deliberately explicit (``sign-firmware``, not
+``sign`` — a future ``sign-ota-update`` may join). The stubs refuse in
+words rather than being missing, because both wait on platform work
+(our MCUboot serial recovery, vendor provisioning). The old flat
+spellings, ``--json``, ``--method``/``--server``/``--token``,
+``MCUHOME_BUILD_*`` and ``build-servers.toml`` retired with the same
+step, without aliases (pre-1.0, the E62 rule).
 
-``build`` selects one of the three build methods (ADR 0020 decision 6),
-never a code path: ``local`` compiles in a build container on this
-machine and is the default (E54), ``local-dev`` compiles on the host
-toolchain, and ``remote`` compiles on a build server. There is exactly
-one spelling for each — ``--method <name>`` and nothing else (E62). The
-choice is a ladder: ``--method``, then :data:`METHOD_VAR`, then the
-default. Whichever ran,
-what comes back is an **unsigned** image plus a build report, and one
-host-side step signs it (:func:`_sign_after_build`, E56) — so the private
-key is absent from every build on every method, not merely from the ones
-that happen to run elsewhere.
+``device build`` selects **where** to build through ADR 0023's ladder,
+most explicit wins: fully manual — ``--build-mode`` plus its
+mode-specific flags (``--build-server``/``--build-token`` for
+``remote``, ``--workspace`` for ``local-dev``, ``--image`` for
+``local``) — bypassing the builder list entirely; a named builder
+(``--builder NAME``); or the configured ``default_builder``, falling
+back to a plain ``local`` build. Builders are configuration (any layer
+of ADR 0022, merged by name), their credentials live in
+``secrets/build-server/<name>.yaml``, and the method vocabulary
+underneath (``local``/``local-dev``/``remote``) stays the workbench's:
+a builder is configuration *about* a method, never a fourth method.
+Whichever ran, what comes back is an **unsigned** image plus a build
+report, and one host-side step signs it (:func:`_sign_after_build`,
+E56) — so the private key is absent from every build on every method,
+not merely from the ones that happen to run elsewhere.
 
 ``--sdk-sources`` serves ``local`` and ``remote`` alike (E65). Both
 create a build context, a context is content-addressed over the SDK
@@ -56,21 +60,12 @@ checks them against it. The flag is an option of the ADR 0022 registry:
 ``MCUHOME_SDK_SOURCES`` and the configuration files (project, user,
 system) set it too, through one resolution
 (:func:`mcuhome.workbench.api.resolve_settings`), and so is ``--jobs``.
-``--server``/``--token`` (:data:`SERVER_VAR`, :data:`TOKEN_VAR`) are
-the ``remote`` method's own rungs, and ``--image`` the ``local``
-method's.
+``config`` edits the same registry the build reads — ``print`` shows
+every effective value with its origin layer, ``set``/``unset`` edit one
+scope's file (``--project`` by default) through the round-trip editor,
+so comments and ``!file`` references survive.
 
-The ``remote`` ladder has a third rung the others do not:
-``$XDG_CONFIG_HOME/mcuhome/build-servers.toml`` names build servers, one
-table per label, with a ``default`` for the run that says nothing — and
-``--server`` takes such a label just as well as a URL, which is what
-makes several build servers a thing a user configures once instead of
-retypes (:mod:`mcuhome_cli.servers`, E63). Tokens live beside it, one
-file per label, so the file that names servers carries no secret.
-This whole rung retires with the vocabulary step: named builders and
-``secrets/build-server/<name>.yaml`` (ADR 0023) replace it.
-
-``validate`` and ``build`` take ``-o json`` and ``-o json-stream``
+``device validate`` and ``device build`` take ``-o json`` and ``-o json-stream``
 (cli ADR 0004): one machine-readable document on stdout — the resolved
 model or the build manifest on success, ``{"ok": false, "errors":
 [...]}`` on failure — or the same document at the end of an NDJSON
@@ -78,33 +73,35 @@ stream of ``start``/``progress``/``error`` messages. Exit codes are the
 same either way, and the build log goes to stderr in both, so
 redirecting stdout into a file leaves both halves intact.
 
-``validate -o json`` carries the **whole** canonical model,
+``device validate -o json`` carries the **whole** canonical model,
 commissioning credentials included, exactly as ``device-model.json``
 does: it is the output of stages 1-3 and a caller that asked for the
-model gets the model. ``build -o json`` carries the build manifest,
-which has none — a manifest describes artifacts. Neither prints the
-human commissioning block, which exists for a person holding a device
-they just built.
+model gets the model. ``device build -o json`` carries the build
+manifest, which has none — a manifest describes artifacts. Neither
+prints the human commissioning block, which exists for a person holding
+a device they just built.
 
 **This module is not an API.** Programs embed
 :mod:`mcuhome.workbench.api`, which is the supported surface;
 everything here is a command line, free to change its internals between
 releases. The one stable machine-facing promise this package makes is
 the command surface itself — a machine driving it feature-probes
-``mcuhome build --help`` for ``--model``, ``--no-sign``/``--public-key``
-and ``-o``.
+``mcuhome device build --help`` for ``--model``,
+``--no-sign``/``--public-key`` and ``-o``.
 
-``validate`` writes nothing at all. ``build`` writes only into its build
-directory, which is deliberately outside the project directory's
-configuration (ADR 0022 — ``init`` puts ``build/`` in the project's
-``.gitignore``): ``<project>/build/<device>/`` unless ``--build-dir``
-says otherwise. Inside it, the generated application is ``app/`` and
-the compiler's working tree is ``build/`` — everything a human is meant
-to read on one side, machine spoil on the other. ``init-pairing`` is
-the one command that writes into the project's *configuration*, and it
-writes into exactly one file — the device's own — plus, with
-``--secrets``, the project's ``secrets/main.yaml``
-(:mod:`mcuhome.workbench.provision`).
+``device validate`` writes nothing at all. ``device build`` writes only
+into its build directory, which is deliberately outside the project
+directory's configuration (ADR 0022 — ``init`` puts ``build/`` in the
+project's ``.gitignore``): ``<project>/build/<device>/`` unless
+``--build-dir`` says otherwise. Inside it, the generated application is
+``app/`` and the compiler's working tree is ``build/`` — everything a
+human is meant to read on one side, machine spoil on the other.
+``device init-pairing`` is the one command that writes into the
+project's *configuration*, and it writes into exactly one file — the
+device's own — plus, with ``--secrets``, the project's
+``secrets/main.yaml`` (:mod:`mcuhome.workbench.provision`).
+``config set``/``unset`` write one configuration file per invocation —
+the named scope's — and nothing else.
 """
 
 from __future__ import annotations
@@ -136,10 +133,13 @@ from mcuhome.workbench import (
     scaffold,
     signing,
 )
+from mcuhome.workbench.loader import load_yaml_file
+from mcuhome.workbench.project import check_secret_file
 
 from mcuhome_cli import __version__ as cli_version
 from mcuhome_cli import output as output_module
-from mcuhome_cli import phases, servers
+from mcuhome_cli import phases
+from mcuhome_cli.i18n import _
 from mcuhome_cli.output import Output
 
 __all__ = [
@@ -156,16 +156,6 @@ __all__ = [
 #: not turn up in the user's config diffs, and ``mcuhome init`` writes
 #: it into the project's ``.gitignore`` (ADR 0022).
 BUILD_DIR = "build"
-
-#: Which of the three build methods runs, when no flag says. Second rung
-#: of the ladder below; the name is this implementation's and has not
-#: been decided by the product owner — see :func:`_resolve_method`.
-METHOD_VAR = "MCUHOME_BUILD_METHOD"
-
-#: The build server the ``remote`` method talks to, and the bearer token
-#: for it (E53). ``--server``/``--token`` beat them.
-SERVER_VAR = "MCUHOME_BUILD_SERVER"
-TOKEN_VAR = "MCUHOME_BUILD_TOKEN"
 
 
 def _process_env() -> dict[str, str]:
@@ -494,19 +484,22 @@ def _snippets_for(model: DeviceModel, extra: list[str] | None) -> tuple[str, ...
 
 
 def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeError]:
-    """``build``'s validate phase: the argument shapes only it can check.
+    """``device build``'s validate phase: the argument shapes only it can check.
 
-    The detached pair — ``--no-sign`` needs ``--public-key``, and what
-    that names has to *be* a public key (ADR 0015 decision 8). All of it
-    is read-only and instant, which is what the validate phase is for: a
-    missing or unusable key is an exit-2 refusal a user gets in a
-    second, not ten minutes into a Matter compile, and the build never
-    starts (cli ADR 0004 §3).
+    Two rule sets, both read-only and instant, which is what the
+    validate phase is for (cli ADR 0004 §3): the builder-selection flag
+    pairing (:func:`_validate_build_selection`), and the detached pair —
+    ``--no-sign`` needs ``--public-key``, and what that names has to
+    *be* a public key (ADR 0015 decision 8). A missing or unusable
+    input is an exit-2 refusal a user gets in a second, not ten minutes
+    into a Matter compile, and the build never starts.
     """
+    problems = _validate_build_selection(args)
     if not args.no_sign:
-        return []
+        return problems
     if args.public_key is None:
         return [
+            *problems,
             BuildError(
                 "--no-sign needs the public half of your signing key (--public-key).",
                 hint=(
@@ -514,12 +507,13 @@ def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeErr
                     "bootloader, so a build that does not sign still has to be told "
                     "which key the signature will come from. Write yours out and pass "
                     "it:\n"
-                    f"    mcuhome public-key -o {signing.PUBLIC_KEY_FILE}\n"
-                    f"    mcuhome build <device> --no-sign --public-key {signing.PUBLIC_KEY_FILE}\n"
-                    "The private half stays where it is; mcuhome sign applies the "
-                    "signature afterwards."
+                    f"    mcuhome public-key > {signing.PUBLIC_KEY_FILE}\n"
+                    "    mcuhome device build <device> --no-sign --public-key "
+                    f"{signing.PUBLIC_KEY_FILE}\n"
+                    "The private half stays where it is; mcuhome device "
+                    "sign-firmware applies the signature afterwards."
                 ),
-            )
+            ),
         ]
     del output  # questions were asked upstream; this phase only checks
     path = Path(args.public_key).expanduser()
@@ -527,41 +521,45 @@ def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeErr
         text = path.read_text(encoding="utf-8")
     except OSError as error:
         return [
+            *problems,
             BuildError(
                 f"MCUHome cannot read the public key {path}: {error.strerror}.",
-                hint=f"write one with: mcuhome public-key -o {path}",
-            )
+                hint=f"write one with: mcuhome public-key > {path}",
+            ),
         ]
     except UnicodeDecodeError:
         return [
+            *problems,
             BuildError(
                 f"{path} is not a PEM public key.",
-                hint=f"write one with: mcuhome public-key -o {path}",
-            )
+                hint=f"write one with: mcuhome public-key > {path}",
+            ),
         ]
     if signing.looks_like_p256_key(text):
         return [
+            *problems,
             BuildError(
                 f"{path} is a private key, and --public-key wants the public half.",
                 hint=(
                     "the whole point of --no-sign is that the private key never "
                     "reaches the machine that builds (ADR 0015 decision 8). Write the "
                     "public half out and pass that:\n"
-                    f"    mcuhome public-key --signing-key {path} -o {signing.PUBLIC_KEY_FILE}"
+                    f"    mcuhome public-key --signing-key {path} > {signing.PUBLIC_KEY_FILE}"
                 ),
-            )
+            ),
         ]
     if not signing.looks_like_p256_public_key(text):
         return [
+            *problems,
             BuildError(
                 f"{path} is not an ECDSA P-256 public key in PEM form.",
                 hint=(
                     "MCUHome signs with ECDSA P-256 (ADR 0015 decision 8). Write the "
-                    "public half of your key with: mcuhome public-key -o <file>"
+                    "public half of your key with: mcuhome public-key > <file>"
                 ),
-            )
+            ),
         ]
-    return []
+    return problems
 
 
 def _resolve_build_key(
@@ -612,67 +610,111 @@ def _build_input(
     return model, args.build_dir or project.root / BUILD_DIR / model.device.name, project
 
 
-def _resolve_method(args: argparse.Namespace, env: dict[str, str]) -> str:
-    """Which build method runs: flag, then variable, then the default (E53/E54).
+#: The manual rung's mode-specific flags, and the mode each belongs to
+#: (ADR 0023 §2). The single source :func:`_validate_build_selection`
+#: enforces: a mode flag without ``--build-mode`` — or beside the wrong
+#: mode — is an exit-2 refusal, never a silently ignored word.
+_MODE_FLAGS: tuple[tuple[str, str, str], ...] = (
+    ("build_server", "--build-server", api.REMOTE),
+    ("build_token", "--build-token", api.REMOTE),
+    ("workspace", "--workspace", api.LOCAL_DEV),
+    ("image", "--image", api.LOCAL),
+)
 
-    The ladder E53 fixed for the remote server address, applied to the
-    method itself: an explicit flag beats the environment, and the
-    environment beats the default, which is the local build container
-    (E54). The file rung stops at the server address: E63 decided what
-    ``build-servers.toml`` says, and it says which build *servers* exist —
-    not which method a build uses. Reading a method out of it (or adding a
-    key to it for one) would settle a configuration surface no decision
-    has settled, so an unanswered ladder ends at the decided default
-    instead.
 
-    ``--method <name>`` is the only spelling of a method (E62). The host
-    method once had a flag of its own, ``--native``, from before the
-    methods had names; it is gone rather than carried, because nothing
-    outside this repository family has ever depended on it and a project
-    that is not public yet owes no backward compatibility.
+def _validate_build_selection(args: argparse.Namespace) -> list[MCUHomeError]:
+    """The builder-selection flag rules, checked before anything runs.
 
-    The flag and variable *names* below are this implementation's and are
-    not in the decision log, which settles the ladder's shape and the
-    ``--server``/``--token`` rung only. They are one constant each,
-    exactly so that a decision can rename them.
+    ADR 0023 §2 has three rungs and they do not mix: ``--build-mode``
+    is the fully manual one and owns the mode-specific flags;
+    ``--builder`` and the configured default take a builder *whole*.
+    Everything here is argument shape — read-only, instant, exit 2.
     """
-    from_flag = getattr(args, "method", None)
-    if from_flag:
-        return api.resolve_method(from_flag)
-    return api.resolve_method(env.get(METHOD_VAR))
+    problems: list[MCUHomeError] = []
+    mode = getattr(args, "build_mode", None)
+    if mode is not None and getattr(args, "builder", None) is not None:
+        problems.append(
+            ConfigError(
+                "--builder selects a configured builder and --build-mode builds "
+                "fully manually — one or the other, not both.",
+                hint=(
+                    "a named builder brings its own server, workspace or image with "
+                    "it (ADR 0023); to override one of those, use --build-mode with "
+                    "the mode's own flags instead"
+                ),
+            )
+        )
+    for attribute, flag, wanted in _MODE_FLAGS:
+        if getattr(args, attribute, None) is None:
+            continue
+        if mode is None:
+            problems.append(
+                ConfigError(
+                    f"{flag} belongs to the fully manual rung: it needs --build-mode {wanted}.",
+                    hint=(
+                        "without --build-mode the build uses a configured builder "
+                        "(--builder NAME, or the default_builder), and a builder "
+                        "carries these values itself (ADR 0023)"
+                    ),
+                )
+            )
+        elif mode != wanted:
+            problems.append(
+                ConfigError(
+                    f"{flag} is a --build-mode {wanted} flag, and this build's mode is {mode}.",
+                    hint="drop the flag, or change the mode it belongs to",
+                )
+            )
+    if mode == api.REMOTE and getattr(args, "build_server", None) is None:
+        problems.append(
+            ConfigError(
+                "--build-mode remote needs --build-server.",
+                hint=(
+                    "name the build server's address (IP or hostname[:port]) — or "
+                    "configure a remote builder once and select it with --builder "
+                    "(ADR 0023)"
+                ),
+            )
+        )
+    return problems
 
 
-def _remote_server(
-    args: argparse.Namespace, env: dict[str, str], output: Output
-) -> tuple[str | None, str | None]:
-    """Build server and token: flag, then variable, then the file (E53/E63).
+def _select_build(
+    args: argparse.Namespace,
+    settings: api.Settings,
+    project: api.Project | None,
+    output: Output,
+) -> api.SelectedBuilder:
+    """Where this build runs: the three rungs of ADR 0023 §2.
 
-    All three rungs of E53's ladder, and the last one is
-    :mod:`mcuhome_cli.servers` — ``build-servers.toml`` and one token file
-    per label under ``$XDG_CONFIG_HOME/mcuhome/``. The rung above always
-    wins, whichever way the one below it would have answered: a
-    ``--token`` beside a label is used and the label's token file is not
-    even opened.
-
-    ``--server`` and the variable take **a label or a URL** (E63), which
-    is what makes the third rung reachable from the first two rather than
-    only from an empty command line — a label is looked up, and it brings
-    its token with it. A ``remote`` build that no rung answers is refused
-    by :class:`~mcuhome.workbench.api.RemoteNotConfigured`, which names
-    all three, rather than defaulted to a server nobody chose.
-
-    Warnings — an unknown key in the file, a token file other accounts can
-    read — go to stderr and never to stdout, which in the machine modes
-    belongs to the document. They arrive pre-formatted from
-    :mod:`mcuhome_cli.servers` (prefix included), so they pass through
-    :meth:`~mcuhome_cli.output.Output.log` rather than ``warn``.
+    The fully manual rung (``--build-mode`` plus its mode-specific
+    flags) bypasses the builder list entirely; otherwise the workbench
+    resolves an explicit ``--builder`` name, the configured
+    ``default_builder``, or the built-in ``local`` fallback — the remote
+    builder's token read from ``secrets/build-server/<name>.yaml`` on
+    the way. The flag pairing rules ran in the validate phase
+    (:func:`_validate_build_selection`), so this function only selects.
     """
-    named = getattr(args, "server", None) or env.get(SERVER_VAR) or None
-    token = getattr(args, "token", None) or env.get(TOKEN_VAR) or None
-    resolution = servers.resolve(named, token=token, env=env)
-    for warning in resolution.warnings:
-        output.log(warning)
-    return resolution.url, resolution.token
+    env = _process_env()
+    mode = getattr(args, "build_mode", None)
+    if mode is not None:
+        selected_workspace = (
+            None if args.workspace is None else expand(str(args.workspace), env).resolve()
+        )
+        return api.SelectedBuilder(
+            method=api.resolve_method(mode),
+            server=args.build_server,
+            token=args.build_token,
+            workspace=selected_workspace,
+            image=args.image,
+        )
+    return api.resolve_builder(
+        settings,
+        name=getattr(args, "builder", None),
+        project=project,
+        env=env,
+        on_warning=output.warn,
+    )
 
 
 def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
@@ -688,9 +730,10 @@ def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
 
 
 def _cmd_build(args: argparse.Namespace, output: Output) -> int:
-    method = _resolve_method(args, _process_env())
     model, out_dir, project = _build_input(args, output)
     settings = _settings(args, project)
+    selection = _select_build(args, settings, project, output)
+    method = selection.method
     output.start("build", device=model.device.name, method=method)
 
     # Host-side stage 4 runs for --generate-only (which stops after it) and
@@ -732,12 +775,13 @@ def _cmd_build(args: argparse.Namespace, output: Output) -> int:
             out_dir,
             project=project,
             settings=settings,
+            selection=selection,
             generated=generated,
             output=output,
         )
 
     return _build_delivered(
-        args, model, out_dir, project=project, settings=settings, method=method, output=output
+        args, model, out_dir, project=project, settings=settings, selection=selection, output=output
     )
 
 
@@ -748,13 +792,16 @@ def _build_local_dev(
     *,
     project: api.Project | None,
     settings: api.Settings,
+    selection: api.SelectedBuilder,
     generated: list[str],
     output: Output,
 ) -> int:
-    """``--method local-dev``: compile on the host, then host-sign (E56).
+    """The ``local-dev`` method: compile on the host, then host-sign (E56).
 
     The local-dev escape hatch (ADR 0007) for a contributor who already has
-    a west workspace. Since E56 it is not a special case: like the two
+    a west workspace — selected manually (``--build-mode local-dev``) or
+    through a configured builder whose ``workspace:`` then names where to
+    compile. Since E56 it is not a special case: like the two
     container-shaped methods it produces an **unsigned** image plus the
     signing parameters (in ``build-manifest.json``), and the private key
     never reaches the west build — the bootloader gets the public half, and
@@ -771,6 +818,16 @@ def _build_local_dev(
     snippets = _snippets_for(model, args.snippet)
     scheme = _update_scheme_of(model)
     public_key, key = _resolve_build_key(args, project)
+    # Where the west workspace is looked for. A selected workspace — the
+    # builder's `workspace:` or the manual rung's --workspace — answers
+    # alone; otherwise the two discovery starts of E18 (this package's
+    # install location, then where the command was run).
+    if selection.workspace is not None:
+        module_dir = selection.workspace
+        started_in = selection.workspace
+    else:
+        module_dir = workspace.installed_module_dir()
+        started_in = Path.cwd()
     # E56: no build signs inline, so the west build gets the PUBLIC key for
     # the bootloader and nothing more — the private key stays for the host
     # signing step below, exactly as the container path keeps it off the
@@ -811,9 +868,9 @@ def _build_local_dev(
             # The library states neither of these for itself: `mcuhome` on
             # a command line *is* the local-dev case (E18), and a command
             # line is the one caller entitled to say "where I am installed"
-            # and "where I was run".
-            module_dir=workspace.installed_module_dir(),
-            started_in=Path.cwd(),
+            # and "where I was run" — or, above, which workspace was chosen.
+            module_dir=module_dir,
+            started_in=started_in,
             on_plan=announce,
             # In the machine modes the compiler's own output would break
             # the document, so it goes to stderr — where a log belongs
@@ -902,7 +959,7 @@ def _build_delivered(
     *,
     project: api.Project | None,
     settings: api.Settings,
-    method: str,
+    selection: api.SelectedBuilder,
     output: Output,
 ) -> int:
     """The two container-shaped methods: build elsewhere, sign on the host.
@@ -925,6 +982,7 @@ def _build_delivered(
     """
     env = _process_env()
     out_dir = out_dir.resolve()
+    method = selection.method
     public_key, key = _resolve_build_key(args, project)
     # Only the public half ever reaches the build environment. Derived from
     # the private key on the signing path, taken verbatim from --public-key
@@ -932,16 +990,15 @@ def _build_delivered(
     signing_pub = _public_pem_for_context(public_key, key)
     jobs, jobs_source = _resolve_jobs(settings)
     remote = method == api.REMOTE
-    reference = "" if remote else container.image_reference(env, override=args.image)
-    # Only the method that uses a build server reads its configuration: a
-    # typo in build-servers.toml is not allowed to stop a build that
-    # compiles in a container on this machine and never opens a socket.
-    server, token = _remote_server(args, env, output) if remote else (None, None)
+    reference = "" if remote else container.image_reference(env, override=selection.image)
+    server, token = (selection.server, selection.token) if remote else (None, None)
 
     if not output.machine:
         print()
         where = "on a build server" if remote else "in the build container"
         print(f"Building {model.device.name} for {model.device.board} {where}")
+        if selection.builder is not None:
+            print(f"  builder {selection.builder.name} ({selection.builder.type})")
         if remote:
             # Only when there is one: a run that is about to be refused for
             # the lack of an address should not print "server None" first.
@@ -1111,7 +1168,7 @@ def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
         hint=(
             f"the build ran {where}, through the build-container ABI (ADR 0018). "
             "The build log above carries what west and the compiler said; "
-            "--method local-dev compiles on the host instead."
+            "--build-mode local-dev compiles on the host instead."
         ),
     )
 
@@ -1139,7 +1196,7 @@ def _format_local_summary(
     lines = [f"Built {name}."]
     lines.append("")
     lines.append("Artifacts")
-    for role, _, destination in copied:
+    for role, _name, destination in copied:
         lines.append(f"  {destination}  ({role})")
     for path in signed:
         lines.append(f"  {path}  (signed)")
@@ -1273,7 +1330,7 @@ def _detached_next_step(out_dir: Path) -> str:
     return (
         "This build is UNSIGNED, and MCUboot boots nothing it cannot verify.\n"
         "Sign it where your private key is:\n"
-        f"    mcuhome sign {out_dir}"
+        f"    mcuhome device sign-firmware {out_dir}"
     )
 
 
@@ -1383,8 +1440,8 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
     for path in result.created:
         print(f"  {path.relative_to(result.project.root)}")
     print()
-    print("Next:")
-    print("  mcuhome new <device> --board TARGET    scaffold the first device")
+    print(_("Next:"))
+    print(_("  mcuhome device new <device> --board TARGET    scaffold the first device"))
     return phases.EXIT_OK
 
 
@@ -1396,17 +1453,20 @@ def _cmd_new(args: argparse.Namespace, output: Output) -> int:
         env=_process_env(),
         cwd=Path.cwd(),
         project_dir=args.project_dir,
+        friendly_name=args.name,
     )
     print(f"Wrote {created.entry}.")
     print()
-    print("Next:")
-    print(f"  mcuhome init-pairing {created.name}    draw this device's commissioning codes")
-    print(f"  mcuhome validate {created.name}        see what it resolves to")
-    print(f"  mcuhome build {created.name}           compile it")
+    print(_("Next:"))
+    print(f"  mcuhome device init-pairing {created.name}    draw this device's commissioning codes")
+    print(f"  mcuhome device validate {created.name}        see what it resolves to")
+    print(f"  mcuhome device build {created.name}           compile it")
     print()
     print(
-        "The configuration has no hardware in it yet — the file carries a complete, "
-        "commented\nexample to uncomment and adjust."
+        _(
+            "The configuration has no hardware in it yet — the file carries a complete, "
+            "commented\nexample to uncomment and adjust."
+        )
     )
     return 0
 
@@ -1451,15 +1511,63 @@ def _apply_manifest_signature(
     return plan, data, ota_image
 
 
+def _is_sign_target(path: Path) -> bool:
+    """Whether *path* is something the signing step can work on directly."""
+    if path.is_file():
+        return path.name in (manifest_module.MANIFEST_FILE, imgtool.BUILD_REPORT_FILE)
+    return path.is_dir() and (
+        (path / manifest_module.MANIFEST_FILE).is_file()
+        or (path / imgtool.BUILD_REPORT_FILE).is_file()
+    )
+
+
+def _resolve_sign_target(args: argparse.Namespace) -> tuple[Path, api.Project | None]:
+    """``device sign-firmware``'s argument: a device name, or a build's path.
+
+    Inside a project, a device name signs that device's last build
+    (``<project>/build/<device>/``). The path form exists for the
+    detached workflow (ADR 0015 decision 8): the machine holding the
+    private key may hold nothing but the key and a delivered build
+    directory — no project, no device configuration — and an explicit
+    ``--signing-key``/``MCUHOME_SIGNING_KEY`` then needs no project at
+    all. A path that *is* a build wins over a device that happens to
+    share its spelling, because the path is the more explicit statement.
+    """
+    spec = Path(args.target)
+    if _is_sign_target(spec):
+        return spec, _optional_project(args)
+    if spec.exists() and not (spec.is_dir() and (spec / api.DEVICE_ENTRY).is_file()):
+        # An existing path that is neither a build nor a device folder:
+        # say what a sign target must hold, not what a device folder is.
+        raise BuildError(
+            f"{spec} holds neither a {manifest_module.MANIFEST_FILE} nor a "
+            f"{imgtool.BUILD_REPORT_FILE}.",
+            hint=(
+                "point at a finished build directory, one of those two files, or "
+                "a device name inside a project (signs its last build)"
+            ),
+        )
+    project, entry = api.find_device(
+        args.target, env=_process_env(), cwd=Path.cwd(), project_dir=args.project_dir
+    )
+    build_dir = project.root / BUILD_DIR / entry.parent.name
+    if not _is_sign_target(build_dir):
+        raise BuildError(
+            f"{entry.parent.name} has no build to sign.",
+            hint=(
+                f"expected {build_dir} to hold a {manifest_module.MANIFEST_FILE} or "
+                f"{imgtool.BUILD_REPORT_FILE} — build first:\n"
+                f"    mcuhome device build {entry.parent.name} --no-sign "
+                "--public-key <file>\n"
+                "or pass the path of a delivered build directory."
+            ),
+        )
+    return build_dir, project
+
+
 def _cmd_sign(args: argparse.Namespace, output: Output) -> int:
     del output
-    target = Path(args.target)
-    # The project is optional here on purpose: `mcuhome sign` runs where
-    # the private key is (ADR 0015 decision 8), which may be a machine
-    # holding nothing but the key and the delivered build — an explicit
-    # --signing-key/MCUHOME_SIGNING_KEY then needs no project at all,
-    # while inside a project the per-project key resolves as everywhere.
-    project = _optional_project(args)
+    target, project = _resolve_sign_target(args)
     # One verb, two report shapes, chosen by which file the directory
     # holds. A local-dev build dir carries build-manifest.json (the manifest
     # path below); a container build dir carries the leaner §7.2.1
@@ -1569,26 +1677,18 @@ def _sign_ota(data: dict, *, out_dir: Path, outputs: list[Path]) -> ota.OtaImage
 
 
 def _cmd_public_key(args: argparse.Namespace, output: Output) -> int:
+    """The public half, on stdout — the document channel is the file API.
+
+    The old ``-o PATH`` spelling retired with the vocabulary step:
+    ``-o`` selects the output *format* everywhere (cli ADR 0004), and a
+    file is a shell redirect — ``mcuhome public-key > signing.pub``.
+    """
     del output
     key = signing.signing_key(
         args.signing_key, env=_process_env(), project=_optional_project(args), create=False
     )
-    pem = signing.public_key_pem(key.pem)
-    if args.output is None:
-        print(pem, end="")
-        return 0
-    output = Path(args.output).expanduser()
-    try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(pem, encoding="utf-8")
-    except OSError as error:
-        raise ConfigError(
-            f"MCUHome cannot write {output}: {error.strerror}.",
-            hint="pick a writable location",
-        ) from error
-    print(f"Wrote the public half of {key.path} to {output}.")
-    print("It is not a secret: it is what a build server needs and all it may have.")
-    return 0
+    print(signing.public_key_pem(key.pem), end="")
+    return phases.EXIT_OK
 
 
 #: What ``mcuhome schema`` can emit, and what produces it.
@@ -1600,31 +1700,357 @@ SCHEMA_EXPORTS = {
 
 def _cmd_schema(args: argparse.Namespace, output: Output) -> int:
     del output
-    text = export.to_json(SCHEMA_EXPORTS[args.what]())
-    if args.output is None:
-        print(text, end="")
-        return 0
-    output = Path(args.output).expanduser()
-    try:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(text, encoding="utf-8")
-    except OSError as error:
-        raise ConfigError(
-            f"MCUHome cannot write {output}: {error.strerror}.",
-            hint="pick a writable location",
-        ) from error
-    print(f"Wrote the {args.what} document to {output}.")
-    return 0
+    print(export.to_json(SCHEMA_EXPORTS[args.what]()), end="")
+    return phases.EXIT_OK
 
 
 def _cmd_clean(args: argparse.Namespace, output: Output) -> int:
-    del args
-    output.log("mcuhome clean is not implemented yet.")
-    output.log(
-        f"Build output is self-contained: delete the {BUILD_DIR}/ directory, or the "
-        "one --build-dir pointed at, and nothing else is affected."
+    del args, output
+    raise BuildError(
+        "mcuhome clean is not implemented yet.",
+        hint=(
+            f"build output is self-contained: delete the {BUILD_DIR}/ directory, or "
+            "the one --build-dir pointed at, and nothing else is affected"
+        ),
     )
-    return phases.EXIT_FAILURE
+
+
+def _cmd_flash(args: argparse.Namespace, output: Output) -> int:
+    """``device flash`` — an honest stub (cli ADR 0003).
+
+    ``--flash-mode recovery`` will be our own MCUboot serial recovery
+    over USB CDC — no vendor tools, the bootloader presents itself as a
+    plain serial port and accepts DFU. That waits on platform work
+    (phase 3: CDC-ACM recovery in our bootloader), so the command
+    refuses in words rather than being missing.
+    """
+    del output
+    raise BuildError(
+        f"mcuhome device flash is not implemented yet ({args.device} was not touched).",
+        hint=(
+            "planned (cli ADR 0003): --flash-mode recovery flashes over our "
+            "MCUboot's USB serial recovery, with no vendor tools. Until then, "
+            "flash the built images with your board's own tooling — the build "
+            "summary names every file and its offset."
+        ),
+    )
+
+
+def _cmd_first_time_setup(args: argparse.Namespace, output: Output) -> int:
+    """``device first-time-setup`` — an honest stub (cli ADR 0003)."""
+    del output
+    raise BuildError(
+        f"mcuhome device first-time-setup is not implemented yet ({args.device} was not touched).",
+        hint=(
+            "planned (cli ADR 0003): one-time board provisioning — build and "
+            "flash our MCUboot bootloader with the vendor's own tooling, the one "
+            "deliberate exception to 'nothing toolchain-shaped on the host' "
+            "(cli ADR 0002). Which tools per vendor is analyzed later."
+        ),
+    )
+
+
+# --------------------------------------------------------------------------
+# config (ADR 0022; cli ADR 0003)
+# --------------------------------------------------------------------------
+
+
+def _config_value_text(value: object) -> str:
+    """One option's value as the human table shows it."""
+    if value is None:
+        return "(unset)"
+    if isinstance(value, list):
+        if not value:
+            return "(none)"
+        if isinstance(value[0], dict):
+            # Builders carry their defining layer (merge-by-name makes
+            # origin a per-builder fact, ADR 0023).
+            return ", ".join(
+                f"{entry['name']} ({entry['type']}, {entry['layer']})" for entry in value
+            )
+        return os.pathsep.join(str(item) for item in value)
+    return str(value)
+
+
+def _cmd_config_print(args: argparse.Namespace, output: Output) -> int:
+    """Every effective option, with the layer it came from (ADR 0022 §3)."""
+    project = _optional_project(args)
+    settings = api.resolve_settings(project=project, env=_process_env(), args={})
+    data = settings.print_data()
+    output.start("config-print")
+    if output.machine:
+        output.result({"ok": True, "config": data})
+        return phases.EXIT_OK
+    rows: list[tuple[str, str, str]] = [("option", "value", "origin")]
+    for name, entry in data.items():
+        origin = str(entry["origin"])
+        if entry["source"] and origin != "default":
+            origin = f"{origin} ({entry['source']})"
+        rows.append((name, _config_value_text(entry["value"]), origin))
+    print(output_module.format_table(rows))
+    return phases.EXIT_OK
+
+
+def _config_setting_or_refuse(settings: api.Settings, name: str) -> api.Setting:
+    if name not in settings:
+        known = ", ".join(opt.name for opt in api.OPTIONS if not opt.bootstrap)
+        raise ConfigError(
+            f"There is no option called {name!r}.",
+            hint=f"the declared options are: {known}",
+        )
+    return settings.setting(name)
+
+
+def _cmd_config_get(args: argparse.Namespace, output: Output) -> int:
+    project = _optional_project(args)
+    settings = api.resolve_settings(project=project, env=_process_env(), args={})
+    setting = _config_setting_or_refuse(settings, args.name)
+    output.start("config-get", name=args.name)
+    if output.machine:
+        entry = settings.print_data()[args.name]
+        output.result({"ok": True, "name": args.name, **entry})
+        return phases.EXIT_OK
+    value = setting.value
+    if isinstance(value, tuple) and not isinstance(value, str):
+        for item in value:
+            print(_config_value_text(item) if isinstance(item, dict) else str(item))
+    elif value is not None:
+        print(value)
+    return phases.EXIT_OK
+
+
+def _cmd_config_set(args: argparse.Namespace, output: Output) -> int:
+    env = _process_env()
+    file = api.scope_config_file(args.scope, project=_optional_project(args), env=env)
+    written = api.set_config_value(file, args.name, args.value, env=env)
+    output.start("config-set", name=args.name, scope=args.scope)
+    if output.machine:
+        document = {"ok": True, "name": args.name, "value": written, "scope": args.scope}
+        output.result({**document, "file": str(file)})
+        return phases.EXIT_OK
+    shown = os.pathsep.join(written) if isinstance(written, list) else written
+    print(_("Set {name} = {value} in {file}.").format(name=args.name, value=shown, file=file))
+    return phases.EXIT_OK
+
+
+def _cmd_config_unset(args: argparse.Namespace, output: Output) -> int:
+    env = _process_env()
+    file = api.scope_config_file(args.scope, project=_optional_project(args), env=env)
+    removed = api.unset_config_value(file, args.name)
+    output.start("config-unset", name=args.name, scope=args.scope)
+    if output.machine:
+        document = {"ok": True, "name": args.name, "removed": removed, "scope": args.scope}
+        output.result({**document, "file": str(file)})
+        return phases.EXIT_OK
+    if removed:
+        print(_("Removed {name} from {file}.").format(name=args.name, file=file))
+    else:
+        print(_("{name} was not set in {file}; nothing changed.").format(name=args.name, file=file))
+    return phases.EXIT_OK
+
+
+# --------------------------------------------------------------------------
+# device list / doctor (cli ADR 0003)
+# --------------------------------------------------------------------------
+
+
+def _build_state(build_dir: Path) -> tuple[bool, bool]:
+    """Whether this device has a build, and whether that build is signed.
+
+    Both report shapes count (E55): a ``build-manifest.json`` records its
+    own signing state; a container delivery is signed exactly when the
+    signed images sit beside its ``build-report.json`` — the same names
+    :data:`imgtool.REPORT_FIRMWARE` gives the signer, so the two cannot
+    disagree about what a signed image is called.
+    """
+    manifest_file = build_dir / manifest_module.MANIFEST_FILE
+    report_file = build_dir / imgtool.BUILD_REPORT_FILE
+    if not manifest_file.is_file() and not report_file.is_file():
+        return False, False
+    if any((build_dir / signed_name).is_file() for _source, signed_name in imgtool.REPORT_FIRMWARE):
+        return True, True
+    if manifest_file.is_file():
+        try:
+            data = manifest_module.read_manifest(manifest_file)
+        except MCUHomeError:
+            return True, False
+        block = data.get("signing")
+        return True, bool(isinstance(block, dict) and block.get("signed"))
+    return True, False
+
+
+def _board_of(entry: Path) -> str | None:
+    """The board straight out of the YAML, for a device that does not validate.
+
+    A configuration can be one drawn credential away from valid and still
+    name its board perfectly well; the listing should say what it can.
+    Anything unreadable here simply answers None — the status column
+    already says the device has problems.
+    """
+    try:
+        data = load_yaml_file(entry)
+    except MCUHomeError:
+        return None
+    device = data.get("device") if isinstance(data, dict) else None
+    board = device.get("board") if isinstance(device, dict) else None
+    return board if isinstance(board, str) else None
+
+
+def _cmd_device_list(args: argparse.Namespace, output: Output) -> int:
+    """The project's devices, each with its validation and build state."""
+    project = api.resolve_project(args.project_dir, env=_process_env(), cwd=Path.cwd())
+    args.json_root = project.root
+    output.start("list", project=str(project.root))
+    devices: list[dict[str, object]] = []
+    for name in project.device_names():
+        entry = project.device_entry(name)
+        result = api.validate_device(entry, project=project, on_warning=output.warn)
+        built, signed = _build_state(project.root / BUILD_DIR / name)
+        board = result.model.device.board if result.model is not None else _board_of(entry)
+        devices.append(
+            {
+                "name": name,
+                "board": board,
+                "ok": result.ok,
+                "problems": len(result.errors),
+                "built": built,
+                "signed": signed,
+            }
+        )
+    if output.machine:
+        output.result({"ok": True, "project": str(project.root), "devices": devices})
+        return phases.EXIT_OK
+    if not devices:
+        print(_("No devices yet."))
+        print(_("  mcuhome device new <name> --board <target>    scaffold the first one"))
+        return phases.EXIT_OK
+    rows: list[tuple[str, str, str, str]] = [("device", "board", "status", "build")]
+    for device in devices:
+        problems = int(device["problems"])  # type: ignore[arg-type]
+        status = (
+            _("ok")
+            if device["ok"]
+            else (_("1 problem") if problems == 1 else _("{n} problems").format(n=problems))
+        )
+        build = _("signed") if device["signed"] else (_("unsigned") if device["built"] else "-")
+        rows.append((str(device["name"]), str(device["board"] or "?"), status, build))
+    print(output_module.format_table(rows))
+    return phases.EXIT_OK
+
+
+#: How ``doctor`` paints each status word.
+_DOCTOR_STYLES = {
+    "ok": output_module.GREEN,
+    "warn": output_module.YELLOW,
+    "fail": output_module.RED,
+}
+
+
+def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
+    """Environment diagnosis — the "why does nothing work" command (cli ADR 0003).
+
+    Every check reports rather than raises, so one broken thing never
+    hides the next: the stack's versions, the project, the resolved
+    configuration, the builders, the container runtime and the secrets
+    permissions each get their own verdict. Any ``fail`` makes the exit
+    code 1; warnings alone leave it 0.
+    """
+    env = _process_env()
+    checks: list[dict[str, str]] = []
+
+    def record(check: str, status: str, detail: str) -> None:
+        checks.append({"check": check, "status": status, "detail": detail})
+
+    output.start("doctor")
+    record("stack", "ok", "; ".join(_stack_version().splitlines()))
+
+    project: api.Project | None = None
+    try:
+        project = _optional_project(args)
+    except MCUHomeError as error:
+        record("project", "fail", error.message)
+    else:
+        if project is None:
+            record("project", "warn", _("not inside a project — mcuhome init creates one"))
+        else:
+            record("project", "ok", str(project.root))
+
+    settings: api.Settings | None = None
+    try:
+        settings = api.resolve_settings(project=project, env=env, args={})
+    except MCUHomeError as error:
+        record("configuration", "fail", error.message)
+    else:
+        configured = sum(
+            1 for entry in settings.print_data().values() if entry["origin"] != "default"
+        )
+        record(
+            "configuration",
+            "ok",
+            _("resolves; {n} option(s) set beyond the defaults").format(n=configured),
+        )
+
+    if settings is not None:
+        complaints: list[str] = []
+        try:
+            api.resolve_builder(
+                settings, name=None, project=project, env=env, on_warning=complaints.append
+            )
+        except MCUHomeError as error:
+            record("builders", "fail", error.message)
+        else:
+            configured_builders = settings.value("builders")
+            if not configured_builders:
+                detail = _("none configured — a plain build uses the local build container")
+            else:
+                listed = ", ".join(
+                    f"{item.name} ({item.type}, {item.layer})" for item in configured_builders
+                )
+                default = settings.value("default_builder")
+                detail = f"{listed}; default: {default or _('built-in local')}"
+            if complaints:
+                detail += "\n" + "\n".join(complaints)
+            record("builders", "warn" if complaints else "ok", detail)
+
+    docker = container.docker_program(env)
+    reference = container.image_reference(env)
+    try:
+        container.preflight(docker, reference, env=env)
+    except MCUHomeError as error:
+        record("container", "fail", error.message)
+    else:
+        record(
+            "container",
+            "ok",
+            _("{docker} answers and the image {image} is present").format(
+                docker=docker, image=reference
+            ),
+        )
+
+    if project is not None and project.secrets_dir.is_dir():
+        complaints = []
+        for file in sorted(project.secrets_dir.rglob("*")):
+            if file.is_file():
+                check_secret_file(file, key_material=False, on_warning=complaints.append)
+        if complaints:
+            record("secrets", "warn", "\n".join(complaints))
+        else:
+            tight = _("{dir} permissions are tight").format(dir=project.secrets_dir)
+            record("secrets", "ok", tight)
+
+    failed = any(entry["status"] == "fail" for entry in checks)
+    if output.machine:
+        output.result({"ok": not failed, "checks": checks})
+        return phases.EXIT_FAILURE if failed else phases.EXIT_OK
+    for entry in checks:
+        status = output.style(
+            entry["status"].ljust(5), _DOCTOR_STYLES[entry["status"]], output_module.BOLD
+        )
+        first, *rest = entry["detail"].splitlines() or [""]
+        print(f"{status} {entry['check'].ljust(14)} {first}")
+        for line in rest:
+            print(" " * 21 + line)
+    return phases.EXIT_FAILURE if failed else phases.EXIT_OK
 
 
 def _stack_version() -> str:
@@ -1658,6 +2084,17 @@ class _StackVersion(argparse.Action):
         del namespace, values, option_string
         print(_stack_version())
         parser.exit()
+
+
+def _show_help(parser: argparse.ArgumentParser):  # noqa: ANN202 - argparse callback
+    """A noun without a verb prints the noun's own help and succeeds."""
+
+    def show(args: argparse.Namespace, output: Output) -> int:
+        del args, output
+        parser.print_help()
+        return phases.EXIT_OK
+
+    return show
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1726,14 +2163,15 @@ def build_parser() -> argparse.ArgumentParser:
             metavar="FORMAT",
             help=(
                 "output format (cli ADR 0004): human (the default), json — one "
-                "machine-readable document on stdout after the run (validate emits the "
-                "resolved model, build the build manifest; failure form "
+                "machine-readable document on stdout after the run (failure form "
                 '{"ok": false, "errors": [...]}) — or json-stream, NDJSON with the verbs '
                 "start/progress/error/result as the run progresses. Exit codes do not "
                 "change, logs go to stderr, and both machine forms force "
                 "--no-interactive"
             ),
         )
+
+    # ---- project-scoped, top-level (cli ADR 0003 §1) ---------------------
 
     init_project_parser = subparsers.add_parser(
         "init",
@@ -1753,7 +2191,89 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(init_project_parser)
     init_project_parser.set_defaults(func=_cmd_init)
 
-    new_parser = subparsers.add_parser(
+    config_parser = subparsers.add_parser(
+        "config",
+        help="read and write MCUHome configuration (five layers, ADR 0022)",
+    )
+    config_sub = config_parser.add_subparsers(dest="config_command")
+    config_parser.set_defaults(func=_show_help(config_parser))
+
+    def add_scope_flags(subparser: argparse.ArgumentParser) -> None:
+        scope = subparser.add_mutually_exclusive_group()
+        scope.add_argument(
+            "--project",
+            dest="scope",
+            action="store_const",
+            const="project",
+            help="edit the project's mcuhome.yaml (the default)",
+        )
+        scope.add_argument(
+            "--user",
+            dest="scope",
+            action="store_const",
+            const="user",
+            help="edit the user configuration (configuration.yaml)",
+        )
+        scope.add_argument(
+            "--system",
+            dest="scope",
+            action="store_const",
+            const="system",
+            help="edit the system configuration (usually needs administrator rights)",
+        )
+        subparser.set_defaults(scope="project")
+
+    config_print_parser = config_sub.add_parser(
+        "print", help="every effective option, with the layer each value came from"
+    )
+    add_output_option(config_print_parser)
+    add_common_options(config_print_parser)
+    config_print_parser.set_defaults(func=_cmd_config_print)
+
+    config_get_parser = config_sub.add_parser("get", help="one option's effective value")
+    config_get_parser.add_argument(
+        "name", help="the option, spelled as its configuration key (e.g. jobs)"
+    )
+    add_output_option(config_get_parser)
+    add_common_options(config_get_parser)
+    config_get_parser.set_defaults(func=_cmd_config_get)
+
+    config_set_parser = config_sub.add_parser(
+        "set", help="set an option in one scope's configuration file"
+    )
+    config_set_parser.add_argument(
+        "name", help="the option, spelled as its configuration key (e.g. default_builder)"
+    )
+    config_set_parser.add_argument(
+        "value",
+        help=(
+            "the value to write; list-valued options (sdk_sources) take several "
+            f"entries separated by {os.pathsep!r}, like their environment variable"
+        ),
+    )
+    add_scope_flags(config_set_parser)
+    add_output_option(config_set_parser)
+    add_common_options(config_set_parser)
+    config_set_parser.set_defaults(func=_cmd_config_set)
+
+    config_unset_parser = config_sub.add_parser(
+        "unset", help="remove an option from one scope's configuration file"
+    )
+    config_unset_parser.add_argument("name", help="the option to remove")
+    add_scope_flags(config_unset_parser)
+    add_output_option(config_unset_parser)
+    add_common_options(config_unset_parser)
+    config_unset_parser.set_defaults(func=_cmd_config_unset)
+
+    # ---- the device noun (cli ADR 0003 §1/§2) ----------------------------
+
+    device_parser = subparsers.add_parser(
+        "device", help="device-scoped commands: new, validate, build, sign-firmware, ..."
+    )
+    device_sub = device_parser.add_subparsers(dest="device_command")
+    device_parser.set_defaults(func=_show_help(device_parser))
+
+    new_parser = device_sub.add_parser(
         "new", help="create a new device folder with a starter configuration"
     )
     new_parser.add_argument("device", help="device name; it becomes the folder and the hostname")
@@ -1766,10 +2286,19 @@ def build_parser() -> argparse.ArgumentParser:
             f"(supported today: {', '.join(sorted(registry.BOARDS))})"
         ),
     )
+    new_parser.add_argument(
+        "--name",
+        default=None,
+        metavar="NAME",
+        help=(
+            "human-readable name, destined for the device's Matter identity "
+            "(default: the device name, title-cased)"
+        ),
+    )
     add_common_options(new_parser)
     new_parser.set_defaults(func=_cmd_new)
 
-    validate_parser = subparsers.add_parser(
+    validate_parser = device_sub.add_parser(
         "validate", help="check a device configuration and print what it resolves to"
     )
     validate_parser.add_argument(
@@ -1779,7 +2308,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(validate_parser)
     validate_parser.set_defaults(func=_cmd_validate)
 
-    build_parser_ = subparsers.add_parser("build", help="build firmware for a device")
+    build_parser_ = device_sub.add_parser("build", help="build firmware for a device")
     # Two ways to say what to build, and exactly one of them per run. The
     # second exists for the build server (dashboard ADR 0007 decision 4):
     # the canonical model is the wire format, so a machine that receives
@@ -1804,7 +2333,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="PATH",
         help=(
-            f"where to generate the application (default: <tree root>/{BUILD_DIR}/<device>, "
+            f"where to generate the application (default: <project>/{BUILD_DIR}/<device>, "
             f"or ./{BUILD_DIR}/<device> with --model)"
         ),
     )
@@ -1823,36 +2352,61 @@ def build_parser() -> argparse.ArgumentParser:
             "(repeatable); the debug-rtt log transport is always already among them"
         ),
     )
-    # ADR 0020 decision 6 / E18: three build methods behind one interface.
-    # The name selects a method, not a code path.
+    # ADR 0023: where a build runs. Three rungs, most explicit wins —
+    # fully manual (--build-mode plus its mode flags), a named builder,
+    # the configured default. A builder is configuration about a method,
+    # never a fourth method.
     build_parser_.add_argument(
-        "--method",
+        "--builder",
         metavar="NAME",
         default=None,
         help=(
-            "which build method compiles this device: "
-            + ", ".join(api.METHODS)
-            + f" (default: {api.DEFAULT_METHOD}, the build container on this "
-            f"machine; {METHOD_VAR} sets it too)"
+            "build through this configured builder (ADR 0023; `builders:` in any "
+            "configuration layer). Default: the configured default_builder "
+            f"({option_env_var('default_builder')} sets it too), else the local "
+            "build container"
         ),
     )
     build_parser_.add_argument(
-        "--server",
-        metavar="URL|LABEL",
+        "--build-mode",
+        metavar="MODE",
+        choices=api.METHODS,
         default=None,
         help=(
-            f"build server the {api.REMOTE} method talks to: an address, or the "
-            f"label of one configured in {servers.CONFIG_FILE} (which brings its "
-            f"token with it); {SERVER_VAR} sets it too"
+            "build fully manually in this mode, bypassing the builders "
+            "configuration: "
+            + ", ".join(api.METHODS)
+            + " — local compiles in a build container on this machine, local-dev "
+            "in your own west workspace, remote on a build server; each mode has "
+            "its own flags below"
         ),
     )
     build_parser_.add_argument(
-        "--token",
+        "--build-server",
+        metavar="ADDRESS",
+        default=None,
+        help=(
+            "--build-mode remote: the build server's address, IP or "
+            "hostname[:port] (a configured builder carries its own)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--build-token",
         metavar="TOKEN",
         default=None,
         help=(
-            f"bearer token for that build server ({TOKEN_VAR} sets it too; a "
-            f"configured label reads {servers.TOKENS_DIR}/<label> instead)"
+            "--build-mode remote: bearer token for that server (a configured "
+            "builder reads secrets/build-server/<name>.yaml instead)"
+        ),
+    )
+    build_parser_.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "--build-mode local-dev: the west workspace to compile in (default: "
+            "discovered from the install location and the working directory)"
         ),
     )
     build_parser_.add_argument(
@@ -1860,8 +2414,8 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="REF",
         default=None,
         help=(
-            f"builder image to compile in (default: {container.IMAGE}; the "
-            f"{container.IMAGE_VAR} environment variable sets it too)"
+            f"--build-mode local: builder image to compile in (default: {container.IMAGE}; "
+            f"the {container.IMAGE_VAR} environment variable sets it too)"
         ),
     )
     build_parser_.add_argument(
@@ -1870,12 +2424,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=(
             "directory holding the hash-pinned MCUHome SDK package this build is "
-            "pinned to (repeatable; searched in order). Needed by --method "
-            f"{api.LOCAL} and --method {api.REMOTE} alike — both create a build "
-            "context, and the pin is part of its identity. An option of the "
-            f"configuration registry (ADR 0022): {option_env_var('sdk_sources')} is a "
-            "PATH-style list of them, the configuration files take a `sdk_sources:` "
-            f"list, and --method {api.LOCAL_DEV} needs none"
+            "pinned to (repeatable; searched in order). Needed by the local and "
+            "remote modes alike — both create a build context, and the pin is "
+            "part of its identity. An option of the configuration registry "
+            f"(ADR 0022): {option_env_var('sdk_sources')} is a PATH-style list of "
+            "them, the configuration files take a `sdk_sources:` list, and "
+            "local-dev needs none"
         ),
     )
     build_parser_.add_argument(
@@ -1897,7 +2451,7 @@ def build_parser() -> argparse.ArgumentParser:
             "build the application UNSIGNED and record the signing parameters in "
             "the build manifest, so that the private key never has to be on the "
             "machine that compiles (ADR 0015 decision 8); needs --public-key, and "
-            "mcuhome sign applies the signature afterwards"
+            "mcuhome device sign-firmware applies the signature afterwards"
         ),
     )
     build_parser_.add_argument(
@@ -1926,12 +2480,15 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(build_parser_)
     build_parser_.set_defaults(func=_cmd_build, validate_input=_validate_build)
 
-    sign_parser = subparsers.add_parser(
-        "sign", help="sign the application image of a finished build"
+    sign_parser = device_sub.add_parser(
+        "sign-firmware", help="sign the application image of a finished build"
     )
     sign_parser.add_argument(
         "target",
-        help=f"build directory, or the {manifest_module.MANIFEST_FILE} inside one",
+        help=(
+            "a device name (signs its last build), a build directory, or the "
+            f"{manifest_module.MANIFEST_FILE}/{imgtool.BUILD_REPORT_FILE} inside one"
+        ),
     )
     sign_parser.add_argument(
         "--signing-key",
@@ -1949,56 +2506,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(sign_parser)
     sign_parser.set_defaults(func=_cmd_sign)
 
-    public_key_parser = subparsers.add_parser(
-        "public-key", help="print the public half of the firmware signing key"
+    flash_parser = device_sub.add_parser(
+        "flash", help="flash the last built firmware (stub, cli ADR 0003)"
     )
-    public_key_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="write it to a file instead of stdout",
-    )
-    public_key_parser.add_argument(
-        "--signing-key",
-        type=Path,
-        default=None,
-        metavar="PATH",
+    flash_parser.add_argument("device", help="device folder name or path")
+    flash_parser.add_argument(
+        "--flash-mode",
+        choices=("recovery", "ota"),
+        default="recovery",
         help=(
-            "which key to take the public half of (default: the project's "
-            f"secrets/firmware/{signing.PRIVATE_KEY_FILE})"
+            "recovery: our MCUboot serial recovery over USB CDC, no vendor tools "
+            "(planned); ota: deliberately undefined for now"
         ),
     )
-    add_common_options(public_key_parser)
-    public_key_parser.set_defaults(func=_cmd_public_key)
+    add_common_options(flash_parser)
+    flash_parser.set_defaults(func=_cmd_flash)
 
-    schema_parser = subparsers.add_parser(
-        "schema", help="print the configuration JSON Schema, or the registry, as JSON"
+    setup_parser = device_sub.add_parser(
+        "first-time-setup",
+        help="one-time board provisioning: our MCUboot via vendor tooling (stub, cli ADR 0003)",
     )
-    schema_parser.add_argument(
-        "what",
-        nargs="?",
-        default="config",
-        choices=sorted(SCHEMA_EXPORTS),
-        help=(
-            "config: a JSON Schema for main.yaml, for editor validation and "
-            "autocomplete. registry: the boards, drivers, clusters and device "
-            "types MCUHome knows, as data"
-        ),
-    )
-    schema_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        metavar="PATH",
-        help="write it to a file instead of stdout",
-    )
-    add_common_options(schema_parser)
-    schema_parser.set_defaults(func=_cmd_schema)
+    setup_parser.add_argument("device", help="device folder name or path")
+    add_common_options(setup_parser)
+    setup_parser.set_defaults(func=_cmd_first_time_setup)
 
-    init_parser = subparsers.add_parser(
+    init_parser = device_sub.add_parser(
         "init-pairing",
         help="draw this device's commissioning credentials and write them into its configuration",
     )
@@ -2022,7 +2554,62 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(init_parser)
     init_parser.set_defaults(func=_cmd_init_pairing)
 
-    clean_parser = subparsers.add_parser("clean", help="remove build output of a device")
+    list_parser = device_sub.add_parser("list", help="list the project's devices with their state")
+    add_output_option(list_parser)
+    add_common_options(list_parser)
+    list_parser.set_defaults(func=_cmd_device_list)
+
+    # ---- environment-scoped, top-level -----------------------------------
+
+    schema_parser = subparsers.add_parser(
+        "schema", help="print the configuration JSON Schema, or the registry, as JSON"
+    )
+    schema_parser.add_argument(
+        "what",
+        nargs="?",
+        default="config",
+        choices=sorted(SCHEMA_EXPORTS),
+        help=(
+            "config: a JSON Schema for main.yaml, for editor validation and "
+            "autocomplete. registry: the boards, drivers, clusters and device "
+            "types MCUHome knows, as data. The document goes to stdout — "
+            "redirect it into a file"
+        ),
+    )
+    add_common_options(schema_parser)
+    schema_parser.set_defaults(func=_cmd_schema)
+
+    public_key_parser = subparsers.add_parser(
+        "public-key",
+        help=(
+            "print the public half of the firmware signing key "
+            "(redirect to write a file: mcuhome public-key > signing.pub)"
+        ),
+    )
+    public_key_parser.add_argument(
+        "--signing-key",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=(
+            "which key to take the public half of (default: the project's "
+            f"secrets/firmware/{signing.PRIVATE_KEY_FILE})"
+        ),
+    )
+    add_common_options(public_key_parser)
+    public_key_parser.set_defaults(func=_cmd_public_key)
+
+    doctor_parser = subparsers.add_parser(
+        "doctor",
+        help="environment diagnosis: project, configuration, builders, container, permissions",
+    )
+    add_output_option(doctor_parser)
+    add_common_options(doctor_parser)
+    doctor_parser.set_defaults(func=_cmd_doctor)
+
+    clean_parser = subparsers.add_parser(
+        "clean", help="remove build output of a device (stub, cli ADR 0003)"
+    )
     clean_parser.add_argument("device", nargs="?", help="device folder name or path")
     clean_parser.add_argument("--all", action="store_true", help="clean every device")
     add_common_options(clean_parser)
