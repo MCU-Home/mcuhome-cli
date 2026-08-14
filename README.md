@@ -17,6 +17,7 @@ library. Programs never use this shell: they embed
 `mcuhome.workbench.api`, the supported programmatic surface.
 
 ```
+mcuhome init         [dir]         # create a project directory
 mcuhome new          <device>      # scaffold a device folder
 mcuhome validate     <device>      # stages 1-3, prints a summary
 mcuhome build        <device>      # stages 1-5, a flashable image
@@ -27,13 +28,34 @@ mcuhome schema       [what]        # the schema and the registry, as JSON
 mcuhome clean        <device|--all>
 ```
 
-`mcuhome validate --json` and `mcuhome build --json` replace the human
-rendering with one machine-readable document on stdout; exit codes do
-not change and the build log goes to stderr. `mcuhome --version`
-reports the *builder's* version — that is the number that determines
-what a build produces.
+Commands run inside an MCUHome **project directory** (ADR 0022): a
+directory `mcuhome init` created, found like a git checkout by
+searching upward, or named explicitly (`--project-dir`,
+`MCUHOME_PROJECT_DIR`). Devices live in `devices/<name>/main.yaml`,
+secrets under `secrets/` (mode 700, kept out of git by the generated
+`.gitignore`), and the firmware signing key is per-project —
+`secrets/firmware/mcuboot.yaml`, generated on first need
+(`--signing-key`/`MCUHOME_SIGNING_KEY` override it with a plain PEM
+file). Options like `--sdk-sources` and `--jobs` resolve through the
+five configuration layers of ADR 0022 (defaults, system, user, project,
+environment, command line), each value knowing where it came from.
+
+`-o json` emits one machine-readable document on stdout after the run;
+`-o json-stream` emits NDJSON as the run progresses (verbs `start`,
+`progress`, `error`, `result` — the vocabulary is append-only, so
+consumers ignore verbs they do not know). Exit codes are the same in
+every mode — 0 success, 1 the operation failed, 2 usage error — the
+build log goes to stderr, and both machine forms are non-interactive.
+`--color auto|always|never` follows the `NO_COLOR` convention.
+`mcuhome --version` reports the whole stack, one line per part.
 
 ## Build servers
+
+> **Transitional.** This whole section retires with the command
+> vocabulary step (cli ADR 0003): named builders configured per ADR
+> 0023 — with credentials in `secrets/build-server/<name>.yaml` —
+> replace `--method`/`--server`/`--token`, `MCUHOME_BUILD_*`,
+> `build-servers.toml` and `tokens/<label>` without aliases.
 
 `mcuhome build --method remote` compiles on a build server. Which one is
 a ladder — the flag beats the environment, and the environment beats the

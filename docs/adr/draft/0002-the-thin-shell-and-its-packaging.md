@@ -85,6 +85,26 @@ developer and may face more manual setup.
 - The ruff settings mirror the platform repository; the pinned version
   is bumped together with it.
 
+## Pinned during implementation (C1, 2026-08-14)
+
+- `--version` (decision 5) prints exactly one line per part —
+  `mcuhome`, `mcuhome-workbench`, `mcuhome-compiler`, `mcuhome-model`
+  — through a raw-printing argparse action (the stock version action
+  re-flows text through the help formatter). The compiler line reads
+  the installed distribution's metadata and says `not installed` when
+  it is absent.
+- The import package grew the output layer ADR 0004 §Consequences
+  allows the thin shell: `mcuhome_cli.output`, `mcuhome_cli.phases`,
+  `mcuhome_cli.i18n` beside `cli.py` and the (transitional)
+  `servers.py`.
+- The CLI consumes the workbench's ADR 0022/0023 surface:
+  `resolve_project`/`find_device` under every `<device>` argument
+  (`--project-dir`/`MCUHOME_PROJECT_DIR` replaced `--config-root`),
+  `resolve_settings` behind `--sdk-sources` and `--jobs`, per-project
+  signing keys through `signing.signing_key(project=...)` — the
+  boundary rule of decision 1 unchanged: parsing, binding, rendering
+  here; behavior in the workbench.
+
 ## Open points
 
 - PyPI publication timing: repositories go public with the split

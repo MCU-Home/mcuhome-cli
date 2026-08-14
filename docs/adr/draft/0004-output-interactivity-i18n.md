@@ -113,6 +113,41 @@ keys — is never translated.
   platform provides only a log stream, the CLI shows stages, not
   percentages.
 
+## Pinned during implementation (C1, 2026-08-14)
+
+- Module homes: the contract lives in three modules of `mcuhome_cli` —
+  `output.py` (modes, stream discipline, colors, the resolved
+  interactivity), `phases.py` (the three-phase runner and the exit-code
+  vocabulary), `i18n.py` (the gettext scaffolding, domain `mcuhome`,
+  catalogs under `mcuhome_cli/locale/`).
+- Stream message shape: every NDJSON message is
+  `{"verb": ..., ...payload}`; `result` carries the document under a
+  `document` key, `error` one serialized error under `error`. The
+  `result` document is the same JSON **value** `-o json` prints — the
+  serialization differs (`-o json` indents for the human peeking at a
+  pipe, the stream is one compact line per message, flushed as it
+  happens).
+- `-o` is wired on `validate` and `build` — the two commands that had
+  `--json`. The remaining commands take it as the vocabulary step
+  rebuilds them (ADR 0003); until then `schema`/`public-key` keep their
+  old `-o PATH` meaning ("write to a file"), which is exactly why the
+  step must rename one of the two spellings.
+- Phase adoption in C1: every command runs through the runner;
+  `build` declares the first real validate phase (the
+  `--no-sign`/`--public-key` pairing and the public-key file checks —
+  read-only, instant, exit 2). Deeper per-command validate phases land
+  with the vocabulary step, when each command is rebuilt anyway.
+- i18n staging: the *skeleton* is wired from day one (the new modules'
+  messages go through `_()`); the as-grown command texts are deliberately
+  not wrapped — they are replaced wholesale by the vocabulary step, and
+  wrapping strings that are about to die is motion, not progress.
+- Colors in C1 are infrastructure plus first uses (error first line,
+  warning prefix, the NEW-key note); the uniform rendering layer of §1
+  is the vocabulary step's companion work.
+- Interactivity detection: stdin **and** stdout must be TTYs; no command
+  asks questions yet, so the interact phase is empty everywhere — the
+  contract and its forcing rules are in place and tested.
+
 ## Open points
 
 - The exact JSON document schemas per command (the old build/validate

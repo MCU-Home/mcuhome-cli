@@ -10,17 +10,20 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG
+from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, make_project
 from mcuhome.compiler import container, localbuild, workspace
 from mcuhome.compiler import localbackend as lb
 from mcuhome.compiler.generate import APP_DIR
-from mcuhome.model import __version__
+from mcuhome.model import __version__ as model_version
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import MODEL_VERSION
 from mcuhome.workbench import buildmethods, imgtool, sessionclient, signing
+from mcuhome.workbench.project import Project
 
+from mcuhome_cli import __version__ as cli_version
 from mcuhome_cli import cli
 from mcuhome_cli.cli import main
+from mcuhome_cli.output import Output
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -171,11 +174,16 @@ def _planner(out_dir: Path):
     return plan
 
 
-def test_version_still_works(capsys) -> None:
+def test_version_reports_the_whole_stack(capsys) -> None:
+    """One line per part (cli ADR 0002 §5), not the builder's number alone."""
     with pytest.raises(SystemExit) as caught:
         main(["--version"])
     assert caught.value.code == 0
-    assert capsys.readouterr().out.strip() == f"mcuhome {__version__}"
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0] == f"mcuhome {cli_version}"
+    parts = [line.split()[0] for line in lines]
+    assert parts == ["mcuhome", "mcuhome-workbench", "mcuhome-compiler", "mcuhome-model"]
+    assert lines[3] == f"mcuhome-model {model_version}"
 
 
 def test_no_arguments_prints_help(capsys) -> None:
@@ -183,8 +191,8 @@ def test_no_arguments_prints_help(capsys) -> None:
     assert "usage: mcuhome" in capsys.readouterr().out
 
 
-def test_validate_by_device_name_with_config_root(capsys) -> None:
-    assert main(["validate", "bench-node", "--config-root", str(FIXTURE_TREE)]) == 0
+def test_validate_by_device_name_with_project_dir(capsys) -> None:
+    assert main(["validate", "bench-node", "--project-dir", str(FIXTURE_TREE)]) == 0
     out = capsys.readouterr().out
     assert "Device     bench-node (Bench Node)" in out
     assert "Board      nrf7002dk/nrf5340/cpuapp" in out
@@ -232,7 +240,7 @@ def test_validate_reports_problems_and_exits_one(tmp_path, capsys) -> None:
 
 
 def test_unknown_device_exits_one(capsys) -> None:
-    assert main(["validate", "nope", "--config-root", str(FIXTURE_TREE)]) == 1
+    assert main(["validate", "nope", "--project-dir", str(FIXTURE_TREE)]) == 1
     assert "no device called" in capsys.readouterr().err
 
 
@@ -268,7 +276,21 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(workspace, "run_build", fake_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "local-dev"]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--method",
+                "local-dev",
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert "Generated 12 files for bmp180-node" in out
     assert "app/src/mcuhome_config.c" in out
@@ -366,7 +388,7 @@ def test_build_uses_the_jobs_flag_and_reports_its_source(tmp_path, capsys, monke
     argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
     assert "-o=-j3" in seen
-    assert "jobs 3 (flag)" in capsys.readouterr().out
+    assert "jobs 3 (arguments)" in capsys.readouterr().out
 
 
 def test_build_uses_the_environment_variable_when_no_flag_is_given(
@@ -384,7 +406,7 @@ def test_build_uses_the_environment_variable_when_no_flag_is_given(
     argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
     assert "-o=-j5" in seen
-    assert "jobs 5 (env)" in capsys.readouterr().out
+    assert "jobs 5 (environment)" in capsys.readouterr().out
 
 
 def test_build_auto_detects_when_neither_flag_nor_environment_is_given(
@@ -425,7 +447,21 @@ def test_build_reports_a_failed_compile_and_points_at_the_build_directory(
 ) -> None:
     monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
     monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (2, "boom\n"))
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "local-dev"]) == 1
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--method",
+                "local-dev",
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 1
+    )
     err = capsys.readouterr().err
     assert "The firmware did not compile (west build exited with 2)." in err
     assert str(tmp_path / "build") in err
@@ -447,7 +483,19 @@ def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     )
     commands = _fake_imgtool(monkeypatch, tmp_path)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert f"image {container.IMAGE}" in out
     assert "Built bmp180-node." in out
@@ -476,7 +524,19 @@ def test_the_local_build_prints_the_footprint_from_the_report(
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     out = capsys.readouterr().out
     assert "mcuboot: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
     assert "app: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
@@ -492,6 +552,7 @@ def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(buildmethods, "compose_local_build", capture)
     _fake_imgtool(monkeypatch, tmp_path)
     argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--image", "localhost/b:wip"]
+    argv += ["--signing-key", str(_private_key(tmp_path))]
     assert main(argv) == 0
     assert seen["image"] == "localhost/b:wip"
     assert "image localhost/b:wip" in capsys.readouterr().out
@@ -508,20 +569,31 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
 
     monkeypatch.setattr(buildmethods, "compose_local_build", refuse)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 1
+    )
     captured = capsys.readouterr()
     assert "answers to" in captured.err
     assert "Traceback" not in captured.err
 
 
 def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) -> None:
-    """No --sdk-source and none in the environment: a typed refusal, no docker.
+    """No --sdk-sources through any channel: a typed refusal, no docker.
 
     The image resolves (a stubbed inspect), and then the SDK pin cannot,
     which is the refusal E54 asks be surfaced cleanly rather than as a
     traceback. Docker is never reached for a build.
     """
-    monkeypatch.delenv("MCUHOME_SDK_SOURCE", raising=False)
 
     def inspect_only(argv, on_line=None):
         if argv[1:3] == ["image", "inspect"]:
@@ -544,7 +616,19 @@ def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) 
 
     monkeypatch.setattr(lb, "_run_command", inspect_only)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 1
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 1
+    )
     err = capsys.readouterr().err
     assert "SDK source" in err
     assert "Traceback" not in err
@@ -559,16 +643,16 @@ def test_build_generate_only_succeeds(tmp_path, capsys) -> None:
     assert (tmp_path / "app" / "boards" / "nrf7002dk_nrf5340_cpuapp.overlay").is_file()
 
 
-def test_build_defaults_to_a_build_dir_at_the_tree_root(tmp_path, capsys) -> None:
-    tree = tmp_path / "config"
-    (tree / "devices" / "bench-node").mkdir(parents=True)
-    (tree / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
+def test_build_defaults_to_a_build_dir_at_the_project_root(tmp_path, capsys) -> None:
+    project = make_project(tmp_path / "config")
+    (project / "devices" / "bench-node").mkdir(parents=True)
+    (project / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, "utf-8")
 
-    assert main(["build", "bench-node", "--config-root", str(tree), "--generate-only"]) == 0
-    assert (tree / "build" / "bench-node" / APP_DIR / "prj.conf").is_file()
-    # Build output stays out of the configuration tree proper.
-    assert list((tree / "devices" / "bench-node").iterdir()) == [
-        tree / "devices" / "bench-node" / "main.yaml"
+    assert main(["build", "bench-node", "--project-dir", str(project), "--generate-only"]) == 0
+    assert (project / "build" / "bench-node" / APP_DIR / "prj.conf").is_file()
+    # Build output stays out of the device configuration proper.
+    assert list((project / "devices" / "bench-node").iterdir()) == [
+        project / "devices" / "bench-node" / "main.yaml"
     ]
     assert "Generated 12 files for bench-node" in capsys.readouterr().out
 
@@ -602,7 +686,7 @@ def test_validate_prints_the_pairing_codes(capsys) -> None:
 
 
 def test_the_published_test_credentials_are_called_out(capsys) -> None:
-    assert main(["validate", "bench-node", "--config-root", str(FIXTURE_TREE)]) == 0
+    assert main(["validate", "bench-node", "--project-dir", str(FIXTURE_TREE)]) == 0
     own = capsys.readouterr().out
     assert "published with the Matter SDK" not in own, "this fixture has credentials of its own"
 
@@ -618,12 +702,12 @@ def test_build_prints_the_pairing_codes_last(tmp_path, capsys) -> None:
 
 
 def test_init_pairing_writes_the_codes_and_prints_them(tmp_path, capsys) -> None:
-    tree = tmp_path / "config"
-    (tree / "devices" / "bench-node").mkdir(parents=True)
-    entry = tree / "devices" / "bench-node" / "main.yaml"
+    project = make_project(tmp_path / "config")
+    (project / "devices" / "bench-node").mkdir(parents=True)
+    entry = project / "devices" / "bench-node" / "main.yaml"
     entry.write_text(VALID_CONFIG.replace("    use_test_pairing: true\n", ""), "utf-8")
 
-    assert main(["init-pairing", "bench-node", "--config-root", str(tree)]) == 0
+    assert main(["init-pairing", "bench-node", "--project-dir", str(project)]) == 0
     out = capsys.readouterr().out
     assert str(entry) in out
     assert "Commissioning" in out
@@ -632,7 +716,7 @@ def test_init_pairing_writes_the_codes_and_prints_them(tmp_path, capsys) -> None
 
     # The device now builds, and the codes it reports are the ones just
     # written — the loop that makes the credentials ordinary input.
-    assert main(["validate", "bench-node", "--config-root", str(tree)]) == 0
+    assert main(["validate", "bench-node", "--project-dir", str(project)]) == 0
     assert out.splitlines()[3] in capsys.readouterr().out
 
 
@@ -652,18 +736,20 @@ def test_init_pairing_with_secrets_writes_two_files(tmp_path, capsys) -> None:
     assert main(["init-pairing", str(entry), "--secrets"]) == 0
 
     out = capsys.readouterr().out
-    assert str(tmp_path / "secrets.yaml") in out
+    # A bare file's stand-in project is its own directory (ADR 0022), so
+    # the values land in secrets/main.yaml next to it.
+    assert str(tmp_path / "secrets" / "main.yaml") in out
     assert "!secret bench_node_passcode" in entry.read_text("utf-8")
     assert main(["validate", str(entry)]) == 0
 
 
 # --------------------------------------------------------------------------
-# --json (dashboard ADR 0011 decision 4)
+# -o json (cli ADR 0004 §2)
 # --------------------------------------------------------------------------
 
 
 def test_validate_json_prints_the_resolved_model(capsys) -> None:
-    assert main(["validate", str(EXAMPLE), "--json"]) == 0
+    assert main(["validate", str(EXAMPLE), "-o", "json"]) == 0
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
     assert document["errors"] == []
@@ -672,19 +758,19 @@ def test_validate_json_prints_the_resolved_model(capsys) -> None:
 
 
 def test_validate_json_suppresses_the_human_summary(capsys) -> None:
-    main(["validate", str(EXAMPLE), "--json"])
+    main(["validate", str(EXAMPLE), "-o", "json"])
     out = capsys.readouterr().out
     assert "Commissioning" not in out
     assert "is valid." not in out
 
 
 def test_validate_json_reports_every_problem_with_a_relative_path(tmp_path, capsys) -> None:
-    tree = tmp_path / "config"
+    tree = make_project(tmp_path / "config")
     entry = tree / "devices" / "bench-node" / "main.yaml"
     entry.parent.mkdir(parents=True)
     entry.write_text(VALID_CONFIG.replace("nrf7002dk/nrf5340/cpuapp", "nrf99dk"), "utf-8")
 
-    assert main(["validate", "bench-node", "--config-root", str(tree), "--json"]) == 1
+    assert main(["validate", "bench-node", "--project-dir", str(tree), "-o", "json"]) == 1
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is False
     assert document["model"] is None
@@ -695,8 +781,8 @@ def test_validate_json_reports_every_problem_with_a_relative_path(tmp_path, caps
 
 
 def test_a_refusal_before_the_tree_is_resolved_is_still_json(capsys) -> None:
-    """Exit codes do not change with --json, and neither does the stream."""
-    assert main(["validate", "no-such-device", "--config-root", "/nope", "--json"]) == 1
+    """Exit codes do not change with -o json, and neither does the stream."""
+    assert main(["validate", "no-such-device", "--project-dir", "/nope", "-o", "json"]) == 1
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is False
     assert document["errors"][0]["kind"] == "ConfigError"
@@ -707,7 +793,18 @@ def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "local-dev", "--json"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path),
+        "--method",
+        "local-dev",
+        "-o",
+        "json",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     assert main(argv) == 0
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
@@ -722,7 +819,7 @@ def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
 
 def test_generate_only_json_says_there_is_no_manifest(tmp_path, capsys) -> None:
     assert (
-        main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only", "--json"])
+        main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--generate-only", "-o", "json"])
         == 0
     )
     document = json.loads(capsys.readouterr().out)
@@ -760,7 +857,21 @@ def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "local-dev"]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path),
+                "--method",
+                "local-dev",
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     assert str(tmp_path / MANIFEST_FILE) in capsys.readouterr().out
     document = json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8"))
     assert document["device"]["name"] == "bmp180-node"
@@ -773,22 +884,40 @@ def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
 # --------------------------------------------------------------------------
 
 
+def _private_key(tmp_path: Path) -> Path:
+    """A throwaway private key, stated explicitly wherever a build signs.
+
+    Since ADR 0015 §8 the default signing key lives *inside the project*
+    (``secrets/firmware/mcuboot.yaml``, generated on first need) — and a
+    bare example file's stand-in project is its own directory, so a test
+    that signs without stating a key would generate one into the
+    repository checkout (the conftest guard fails the test that tries).
+    """
+    key = tmp_path / "signing.key"
+    if not key.exists():
+        key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+        key.chmod(0o600)  # key material: anything wider is a refusal (ADR 0022 §5)
+    return key
+
+
 def _public_key(tmp_path: Path) -> Path:
-    private = tmp_path / "signing.key"
-    private.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    private = _private_key(tmp_path)
     public = tmp_path / "signing.pub"
     public.write_text(signing.public_key_pem(private.read_text("utf-8")), "utf-8")
     return public
 
 
-def test_no_sign_without_a_public_key_is_a_refusal(tmp_path, capsys) -> None:
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 1
+def test_no_sign_without_a_public_key_is_an_exit_2_refusal(tmp_path, capsys) -> None:
+    """The validate phase (cli ADR 0004 §3/§4): a missing required input is
+    a usage refusal — exit 2, and the build never starts."""
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 2
     err = capsys.readouterr().err
     assert "mcuhome public-key" in err
 
 
 def test_no_sign_refuses_a_private_key_as_the_public_one(tmp_path, capsys) -> None:
-    """The one mistake the feature exists to prevent."""
+    """The one mistake the feature exists to prevent — caught in the
+    validate phase, so it is an exit-2 refusal and the build never runs."""
     private = tmp_path / "signing.key"
     private.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
     assert (
@@ -803,7 +932,7 @@ def test_no_sign_refuses_a_private_key_as_the_public_one(tmp_path, capsys) -> No
                 str(private),
             ]
         )
-        == 1
+        == 2
     )
     assert "is a private key" in capsys.readouterr().err
 
@@ -977,7 +1106,7 @@ def test_no_sign_local_stops_at_the_unsigned_image(tmp_path, capsys, monkeypatch
 def test_no_sign_local_still_needs_a_public_key(tmp_path, capsys, monkeypatch) -> None:
     """The bootloader needs the public key even when the build never signs."""
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 1
+    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 2
     assert "mcuhome public-key" in capsys.readouterr().err
 
 
@@ -997,7 +1126,19 @@ def test_a_no_sign_rebuild_drops_a_prior_signed_image_and_ota(
 
     # A first build that signs on the host: firmware.signed.* and an .ota land.
     _fake_imgtool(monkeypatch, tmp_path)
-    assert main(["build", str(EXAMPLE), "--build-dir", str(out_dir)]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(out_dir),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert (out_dir / "firmware.signed.bin").is_file()
     assert (out_dir / "firmware.signed.hex").is_file()
@@ -1095,8 +1236,7 @@ def test_sign_on_a_directory_with_no_build_output_is_a_clean_refusal(tmp_path, c
     win if it existed), so the refusal is the missing build-manifest.json —
     a typed message, not a traceback.
     """
-    key = tmp_path / "signing.key"
-    key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
+    key = _private_key(tmp_path)
     empty = tmp_path / "empty"
     empty.mkdir()
     assert main(["sign", str(empty), "--signing-key", str(key)]) == 1
@@ -1110,9 +1250,12 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
 
     The container gets the **public** key and nothing else: the private key
     is never one of the arguments the build backend is handed, and what it
-    *is* handed for the key is a public key. The docker-argv half of the
-    same invariant is asserted against the real backend in
-    ``mcuhome/tests_py/test_localbuild.py``.
+    *is* handed for the key is a public key. Run inside a real project, so
+    the key under test is the per-project one (ADR 0015 §8) — generated
+    into ``secrets/firmware/mcuboot.yaml`` by this very build, and still
+    absent from everything the backend received, path and value alike.
+    The docker-argv half of the same invariant is asserted against the
+    real backend in the workbench's own ``test_localbuild.py``.
     """
     handed: dict[str, object] = {}
 
@@ -1123,17 +1266,34 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
     monkeypatch.setattr(buildmethods, "compose_local_build", record)
     _fake_imgtool(monkeypatch, tmp_path)
 
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path)]) == 0
+    project = make_project(tmp_path / "proj")
+    device_dir = project / "devices" / "bmp180-node"
+    device_dir.mkdir(parents=True)
+    (device_dir / "main.yaml").write_text(EXAMPLE.read_text("utf-8"), "utf-8")
 
-    # The private key was generated on first need; name its path and prove
-    # it appears in nothing the backend received.
-    key_path = signing.default_key_path(dict(os.environ))
-    assert key_path.is_file()  # it exists — and yet:
+    argv = ["build", "bmp180-node", "--project-dir", str(project)]
+    argv += ["--build-dir", str(tmp_path / "out")]
+    assert main(argv) == 0
+
+    # The per-project key was generated on first need — the human header
+    # says so loudly — and yet nothing the backend received names or
+    # contains it.
+    out = capsys.readouterr().out
+    key_home = project / "secrets" / "firmware" / "mcuboot.yaml"
+    assert key_home.is_file()
+    assert str(key_home) in out
+    assert "NEW" in out
     everything = " ".join(str(value) for value in handed.values())
-    assert str(key_path) not in everything
-    # What the backend WAS given for the key is the public half.
+    assert str(key_home) not in everything
+    assert "PRIVATE KEY" not in everything
+    # What the backend WAS given for the key is the public half — of
+    # exactly the key that lives in the project's secrets.
     assert signing.looks_like_p256_public_key(str(handed["signing_pub"]))
     assert not signing.looks_like_p256_key(str(handed["signing_pub"]))
+    resolved = signing.signing_key(
+        None, env={}, project=Project(root=project, discovered=True), create=False
+    )
+    assert signing.public_key_pem(resolved.pem) == handed["signing_pub"]
 
 
 # --------------------------------------------------------------------------
@@ -1141,54 +1301,74 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
 # --------------------------------------------------------------------------
 
 
-def test_new_scaffolds_a_device_and_names_the_next_step(tmp_path, capsys, monkeypatch) -> None:
+def test_init_then_new_is_the_whole_start(tmp_path, capsys, monkeypatch) -> None:
+    """The fresh-machine loop: init creates the project, new the device."""
     monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
+    out = capsys.readouterr().out
+    assert "Created an MCUHome project" in out
+    assert ".mcuhome-project-root" in out
+    assert (tmp_path / "secrets").stat().st_mode & 0o777 == 0o700
+    assert "secrets/" in (tmp_path / ".gitignore").read_text("utf-8")
+    assert "build/" in (tmp_path / ".gitignore").read_text("utf-8")
+
     assert main(["new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]) == 0
     out = capsys.readouterr().out
     assert "mcuhome init-pairing bench-node" in out
     assert (tmp_path / "devices" / "bench-node" / "main.yaml").is_file()
 
 
-def test_new_refuses_an_existing_device(tmp_path, capsys) -> None:
-    assert (
-        main(
-            [
-                "new",
-                "bench-node",
-                "--board",
-                "nrf7002dk/nrf5340/cpuapp",
-                "--config-root",
-                str(tmp_path),
-            ]
-        )
-        == 0
-    )
+def test_init_on_an_existing_project_is_a_no_op(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
     capsys.readouterr()
-    assert (
-        main(
-            [
-                "new",
-                "bench-node",
-                "--board",
-                "nrf7002dk/nrf5340/cpuapp",
-                "--config-root",
-                str(tmp_path),
-            ]
-        )
-        == 1
-    )
+    assert main(["init"]) == 0
+    assert "already an MCUHome project" in capsys.readouterr().out
+
+
+def test_init_refuses_a_directory_with_existing_work(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "notes.txt").write_text("mine\n", "utf-8")
+    assert main(["init"]) == 1
+    err = capsys.readouterr().err
+    assert "not empty" in err
+    assert "notes.txt" in err
+    assert "--force" in err
+    assert not (tmp_path / ".mcuhome-project-root").exists()
+    assert main(["init", "--force"]) == 0
+    assert (tmp_path / ".mcuhome-project-root").is_file()
+    assert (tmp_path / "notes.txt").read_text("utf-8") == "mine\n"
+
+
+def test_new_outside_any_project_points_at_init(tmp_path, capsys, monkeypatch) -> None:
+    """The old implicit tree creation is gone: a device needs a project."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]) == 1
+    err = capsys.readouterr().err
+    assert "No MCUHome project" in err
+    assert "mcuhome init" in err
+    assert not (tmp_path / "devices").exists()
+
+
+def test_new_refuses_an_existing_device(tmp_path, capsys) -> None:
+    project = make_project(tmp_path / "proj")
+    argv = ["new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]
+    argv += ["--project-dir", str(project)]
+    assert main(argv) == 0
+    capsys.readouterr()
+    assert main(argv) == 1
     assert "already a device" in capsys.readouterr().err
 
 
 def test_new_refuses_a_board_nobody_brought_up(tmp_path, capsys) -> None:
-    assert main(["new", "bench-node", "--board", "nrf99dk", "--config-root", str(tmp_path)]) == 1
+    project = make_project(tmp_path / "proj")
+    argv = ["new", "bench-node", "--board", "nrf99dk", "--project-dir", str(project)]
+    assert main(argv) == 1
     assert "nrf7002dk/nrf5340/cpuapp" in capsys.readouterr().err
 
 
 def test_public_key_writes_the_public_half(tmp_path, capsys, monkeypatch) -> None:
-    key = tmp_path / "signing.key"
-    key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
-    monkeypatch.setenv(signing.KEY_VAR, str(key))
+    monkeypatch.setenv(signing.KEY_VAR, str(_private_key(tmp_path)))
 
     assert main(["public-key"]) == 0
     printed = capsys.readouterr().out
@@ -1199,10 +1379,27 @@ def test_public_key_writes_the_public_half(tmp_path, capsys, monkeypatch) -> Non
     assert (tmp_path / "signing.pub").read_text("utf-8") == printed
 
 
-def test_public_key_never_creates_a_key(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "empty"))
+def test_public_key_outside_a_project_names_every_way_to_a_key(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """No project, no override: a refusal in words, never a generated key."""
+    monkeypatch.chdir(tmp_path)
     assert main(["public-key"]) == 1
-    assert "no such file" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "secrets/firmware/mcuboot.yaml" in err
+    assert "--signing-key" in err
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_public_key_never_creates_a_key(tmp_path, capsys, monkeypatch) -> None:
+    """Inside a project without a key it still refuses rather than generates."""
+    project = make_project(tmp_path / "proj")
+    monkeypatch.chdir(project)
+    assert main(["public-key"]) == 1
+    err = capsys.readouterr().err
+    assert "no such file" in err
+    assert "mcuboot.yaml" in err
+    assert not (project / "secrets" / "firmware").exists()
 
 
 def test_schema_prints_the_configuration_schema(capsys) -> None:
@@ -1276,7 +1473,7 @@ def test_build_from_a_model_reads_no_configuration_tree(tmp_path, monkeypatch) -
     def explode(*arguments, **keywords):  # pragma: no cover - must not run
         raise AssertionError("--model must not resolve a configuration tree")
 
-    monkeypatch.setattr("mcuhome_cli.cli.resolve_device", explode)
+    monkeypatch.setattr(cli.api, "find_device", explode)
     assert (
         main(
             [
@@ -1340,10 +1537,10 @@ def test_a_missing_model_file_says_where_one_comes_from(tmp_path, capsys) -> Non
 
 
 def test_model_errors_serialize_in_json_mode(tmp_path, capsys) -> None:
-    """--json stays a document even when the model was the problem."""
+    """-o json stays a document even when the model was the problem."""
     path = tmp_path / "device-model.json"
     path.write_text(json.dumps({"model_version": 99}), encoding="utf-8")
-    assert main(["build", "--model", str(path), "--generate-only", "--json"]) == 1
+    assert main(["build", "--model", str(path), "--generate-only", "-o", "json"]) == 1
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is False
     assert document["errors"][0]["message"].startswith("The device model")
@@ -1495,10 +1692,11 @@ def test_an_unknown_method_is_a_refusal_listing_the_real_ones(tmp_path, capsys) 
 
 def test_the_server_ladder_takes_the_flag_then_the_variable() -> None:
     """E53, verbatim: --server/--token, then MCUHOME_BUILD_SERVER/_TOKEN."""
+    quiet = Output()
     env = {cli.SERVER_VAR: "ws://from-env/ws", cli.TOKEN_VAR: "env-token"}
-    assert cli._remote_server(_build_args(), env) == ("ws://from-env/ws", "env-token")
+    assert cli._remote_server(_build_args(), env, quiet) == ("ws://from-env/ws", "env-token")
     args = _build_args(server="ws://from-flag/ws", token="flag-token")
-    assert cli._remote_server(args, env) == ("ws://from-flag/ws", "flag-token")
+    assert cli._remote_server(args, env, quiet) == ("ws://from-flag/ws", "flag-token")
 
 
 def test_the_server_ladder_falls_to_the_file_and_then_to_nothing(tmp_path) -> None:
@@ -1521,19 +1719,23 @@ def test_the_server_ladder_falls_to_the_file_and_then_to_nothing(tmp_path) -> No
     (directory / "tokens" / "home").write_text("file-token\n", encoding="utf-8")
     (directory / "tokens" / "home").chmod(0o600)
 
+    quiet = Output()
     env = {"XDG_CONFIG_HOME": str(config_home)}
-    assert cli._remote_server(_build_args(), env) == ("wss://build.lan:8443/ws", "file-token")
+    assert cli._remote_server(_build_args(), env, quiet) == (
+        "wss://build.lan:8443/ws",
+        "file-token",
+    )
 
     # The rung above still wins, and a label reaches the file from it.
     with_flag = _build_args(server="ws://from-flag/ws", token="flag-token")
-    assert cli._remote_server(with_flag, env) == ("ws://from-flag/ws", "flag-token")
-    assert cli._remote_server(_build_args(server="home"), env) == (
+    assert cli._remote_server(with_flag, env, quiet) == ("ws://from-flag/ws", "flag-token")
+    assert cli._remote_server(_build_args(server="home"), env, quiet) == (
         "wss://build.lan:8443/ws",
         "file-token",
     )
 
     # And with no file anywhere, the ladder ends where it always did.
-    assert cli._remote_server(_build_args(), {}) == (None, None)
+    assert cli._remote_server(_build_args(), {}, quiet) == (None, None)
 
 
 def test_a_configured_label_reaches_the_remote_method_with_its_token(
@@ -1563,8 +1765,17 @@ def test_a_configured_label_reaches_the_remote_method_with_its_token(
         raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
 
     monkeypatch.setattr(cli.api, "run_build", refuse)
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
-    argv += ["--server", "home", "--sdk-source", str(tmp_path)]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    argv += ["--server", "home", "--sdk-sources", str(tmp_path)]
     assert main(argv) == 1
     capsys.readouterr()
     assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/ws", "file-token")
@@ -1580,7 +1791,16 @@ def test_an_unknown_label_is_a_refusal_listing_the_configured_ones(
         '[server.home]\nurl = "wss://build.lan:8443/ws"\n', encoding="utf-8"
     )
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     assert main(argv + ["--server", "hoem"]) == 1
     err = capsys.readouterr().err
     assert "hoem" in err
@@ -1602,7 +1822,16 @@ def test_a_broken_server_file_stops_a_remote_build_and_no_other(
     (directory / "build-servers.toml").write_text("this is not TOML {{{\n", encoding="utf-8")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
 
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     assert main(argv) == 1
     err = capsys.readouterr().err
     assert "not valid TOML" in err
@@ -1610,12 +1839,24 @@ def test_a_broken_server_file_stops_a_remote_build_and_no_other(
 
     signed = _capture_signing(monkeypatch)
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
-    assert main(["build", str(EXAMPLE), "--build-dir", str(tmp_path / "local")]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(tmp_path / "local"),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
     assert [call["device"] for call in signed] == ["bmp180-node"]
 
 
 def test_a_group_readable_token_warns_on_stderr(tmp_path, capsys, monkeypatch) -> None:
-    """Loudly, and never on stdout — in --json mode that belongs to the document."""
+    """Loudly, and never on stdout — in the machine modes that belongs to the document."""
     config_home = tmp_path / "xdg"
     directory = config_home / "mcuhome"
     (directory / "tokens").mkdir(parents=True)
@@ -1630,8 +1871,17 @@ def test_a_group_readable_token_warns_on_stderr(tmp_path, capsys, monkeypatch) -
         raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
 
     monkeypatch.setattr(cli.api, "run_build", refuse)
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
-    argv += ["--server", "home", "--sdk-source", str(tmp_path), "--json"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    argv += ["--server", "home", "--sdk-sources", str(tmp_path), "-o", "json"]
     assert main(argv) == 1
     captured = capsys.readouterr()
     assert "Warning:" in captured.err
@@ -1640,16 +1890,33 @@ def test_a_group_readable_token_warns_on_stderr(tmp_path, capsys, monkeypatch) -
     json.loads(captured.out)
 
 
-def test_remote_without_a_server_refuses_and_names_the_two_knobs(
+def test_remote_without_a_server_refuses_in_the_builder_vocabulary(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """Selectable, and honest about what it is missing."""
+    """Selectable, and honest about what it is missing.
+
+    The refusal is the workbench's, and since ADR 0023 its hint speaks
+    the named-builder vocabulary — the configuration that outlives the
+    transitional ``--server`` rung this command still carries until the
+    vocabulary step (cli ADR 0003) lands the matching flags.
+    """
     monkeypatch.delenv(cli.SERVER_VAR, raising=False)
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "remote"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     assert main(argv) == 1
     err = capsys.readouterr().err
-    assert "--server" in err
-    assert cli.SERVER_VAR in err
+    assert "type: remote" in err
+    assert "--builder" in err
+    assert "default_builder" in err
+    assert "--build-mode remote --build-server" in err
     assert "Traceback" not in err
 
 
@@ -1666,12 +1933,21 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
     nothing to work around any more.
     """
     monkeypatch.setenv(cli.SERVER_VAR, "ws://build.example/ws")
-    monkeypatch.delenv(cli.SDK_SOURCE_VAR, raising=False)
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path), "--method", "remote"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     assert main(argv) == 1
     err = capsys.readouterr().err
-    assert "--sdk-source" in err
-    assert cli.SDK_SOURCE_VAR in err
+    assert "--sdk-sources" in err
+    assert "MCUHOME_SDK_SOURCES" in err
+    assert "sdk_sources:" in err
     assert "Traceback" not in err
 
 
@@ -1680,11 +1956,11 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
 ) -> None:
     """E65: the ladder's second rung serves ``remote``, not only ``local``.
 
-    ``MCUHOME_SDK_SOURCE`` was documented for "the default build path"
-    while the ``remote`` method had no use for a pin at all. It has one
-    now — the same one — so the variable is asserted against the request
-    the remote method actually receives, rather than against the helper
-    that reads it, which would prove only that the helper works.
+    ``MCUHOME_SDK_SOURCES`` is the registry option's environment channel
+    (ADR 0022) and serves the ``remote`` method exactly as it serves
+    ``local``, so the variable is asserted against the request the remote
+    method actually receives, rather than against the resolution helper,
+    which would prove only that the helper works.
     """
     seen: list[buildmethods.BuildRequest] = []
 
@@ -1694,9 +1970,18 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
 
     monkeypatch.setattr(cli.api, "run_build", refuse)
     monkeypatch.setenv(
-        cli.SDK_SOURCE_VAR, os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
+        "MCUHOME_SDK_SOURCES", os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
     )
-    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out"), "--method", "remote"]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
     argv += ["--server", "ws://build.example/ws"]
     assert main(argv) == 1
     capsys.readouterr()
@@ -1707,7 +1992,7 @@ def _capture_signing(monkeypatch) -> list[dict]:
     """Replace the one signing step and record every call it receives."""
     calls: list[dict] = []
 
-    def record(model, out_dir, *, key, env, report):
+    def record(model, out_dir, *, key, env, report, project=None):
         calls.append({"device": model.device.name, "out_dir": out_dir, "report": report})
         return cli._Signed(signed=[], ota=None, manifest=None)
 
@@ -1740,12 +2025,25 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     monkeypatch.setattr(workspace, "run_build", _fake_build_run)
     local_dev_dir = tmp_path / "local-dev"
     argv = ["build", str(EXAMPLE), "--build-dir", str(local_dev_dir), "--method", "local-dev"]
+    argv += ["--signing-key", str(_private_key(tmp_path))]
     assert main(argv) == 0
 
     # local, through the real dispatch onto a stubbed container backend.
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     local_dir = tmp_path / "local"
-    assert main(["build", str(EXAMPLE), "--build-dir", str(local_dir)]) == 0
+    assert (
+        main(
+            [
+                "build",
+                str(EXAMPLE),
+                "--build-dir",
+                str(local_dir),
+                "--signing-key",
+                str(_private_key(tmp_path)),
+            ]
+        )
+        == 0
+    )
 
     # remote: stubbed at the dispatch, which is this method's seam from
     # here — see the module the refusal above points at.
@@ -1775,8 +2073,17 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     monkeypatch.setattr(cli.api, "run_build", delivered)
     sdk_source = tmp_path / "packages"
     sdk_source.mkdir()
-    argv = ["build", str(EXAMPLE), "--build-dir", str(remote_dir), "--method", "remote"]
-    argv += ["--server", "ws://build.example/ws", "--sdk-source", str(sdk_source)]
+    argv = [
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(remote_dir),
+        "--method",
+        "remote",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    argv += ["--server", "ws://build.example/ws", "--sdk-sources", str(sdk_source)]
     assert main(argv) == 0
     capsys.readouterr()
 
@@ -1827,3 +2134,71 @@ def test_the_build_help_advertises_the_three_methods(capsys) -> None:
     assert "--server" in out
     # E62: one spelling per method, and the old alias is not one of them.
     assert "--native" not in out
+
+
+# --------------------------------------------------------------------------
+# -o json-stream: the NDJSON contract (cli ADR 0004 §2)
+# --------------------------------------------------------------------------
+
+
+def _stream_lines(out: str) -> list[dict]:
+    lines = [json.loads(line) for line in out.splitlines() if line]
+    assert all("verb" in line for line in lines)
+    return lines
+
+
+def test_validate_json_stream_ends_in_the_json_document(capsys) -> None:
+    """`result` carries the same document `-o json` prints — one contract."""
+    assert main(["validate", str(EXAMPLE), "-o", "json"]) == 0
+    single = json.loads(capsys.readouterr().out)
+
+    assert main(["validate", str(EXAMPLE), "-o", "json-stream"]) == 0
+    lines = _stream_lines(capsys.readouterr().out)
+    assert lines[0]["verb"] == "start"
+    assert lines[0]["task"] == "validate"
+    assert lines[-1]["verb"] == "result"
+    assert lines[-1]["document"] == single
+
+
+def test_validate_json_stream_streams_each_error(tmp_path, capsys) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG.replace("device_role: ftd", "device_role: sed"), "utf-8")
+    assert main(["validate", str(entry), "-o", "json-stream"]) == 1
+    lines = _stream_lines(capsys.readouterr().out)
+    verbs = [line["verb"] for line in lines]
+    assert "error" in verbs
+    error = next(line for line in lines if line["verb"] == "error")
+    assert "Sleepy end devices" in error["error"]["message"]
+    assert lines[-1]["verb"] == "result"
+    assert lines[-1]["document"]["ok"] is False
+
+
+def test_build_json_stream_reports_honest_stages(tmp_path, capsys) -> None:
+    """start, the stages that really ran, result — and stdout carries
+    nothing else; the machine modes force the log onto stderr."""
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path)]
+    argv += ["--generate-only", "-o", "json-stream"]
+    assert main(argv) == 0
+    lines = _stream_lines(capsys.readouterr().out)
+    verbs = [line["verb"] for line in lines]
+    assert verbs[0] == "start"
+    assert "progress" in verbs
+    stages = [line["stage"] for line in lines if line["verb"] == "progress"]
+    assert stages == ["generate"]
+    assert lines[-1]["verb"] == "result"
+    assert lines[-1]["document"]["ok"] is True
+
+
+def test_a_failure_in_json_stream_is_error_verbs_plus_the_failure_document(
+    tmp_path, capsys
+) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG.replace("device_role: ftd", "device_role: sed"), "utf-8")
+    argv = ["build", str(entry), "--build-dir", str(tmp_path / "out")]
+    argv += ["--generate-only", "-o", "json-stream"]
+    assert main(argv) == 1
+    lines = _stream_lines(capsys.readouterr().out)
+    assert [line["verb"] for line in lines if line["verb"] == "error"]
+    assert lines[-1]["verb"] == "result"
+    assert lines[-1]["document"]["ok"] is False
+    assert lines[-1]["document"]["errors"]

@@ -81,6 +81,16 @@ depends on the spellings — the E62 rule):
   as honest stubs until then.
 - Old spellings die in the same release that introduces the new ones.
 
+## Pinned during implementation (C1, 2026-08-14)
+
+- `init` shipped ahead of the vocabulary step, with this table's
+  semantics (plus: it also creates the ADR 0022 marker and `devices/`,
+  is a no-op on an existing project, and takes an optional positional
+  directory). It could not wait: the project model removed the implicit
+  tree creation the old `new` did, so without `init` a fresh machine
+  had no way to a first project. Everything else in §2 lands as its own
+  step.
+
 ## Open points
 
 - `device init-pairing` naming (keep, or fold under a future

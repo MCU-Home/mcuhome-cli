@@ -16,6 +16,7 @@ import pytest
 from mcuhome_cli.cli import build_parser, main
 
 COMMANDS = [
+    "init",
     "new",
     "validate",
     "build",
@@ -52,7 +53,8 @@ def test_every_command_has_help(capsys, command: str) -> None:
 
 
 def test_the_parser_knows_exactly_the_documented_commands() -> None:
-    """The surface of builder-pipeline.md §8, no silent additions."""
+    """The as-grown surface, no silent additions — the decided vocabulary
+    (cli ADR 0003) replaces it as its own step."""
     parser = build_parser()
     # argparse has no public accessor for its subparsers action.
     subparsers = next(action for action in parser._actions if action.dest == "command")
@@ -60,9 +62,11 @@ def test_the_parser_knows_exactly_the_documented_commands() -> None:
 
 
 def test_build_help_advertises_the_probed_flags(capsys) -> None:
-    """The flags the build server's feature probe looks for."""
+    """The flags a machine driving the command feature-probes for."""
     with pytest.raises(SystemExit):
         main(["build", "--help"])
     out = capsys.readouterr().out
-    for flag in ("--model", "--no-sign", "--public-key", "--json"):
+    for flag in ("--model", "--no-sign", "--public-key", "-o", "--project-dir"):
         assert flag in out
+    assert "--json" not in out
+    assert "--config-root" not in out

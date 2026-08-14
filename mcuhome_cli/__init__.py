@@ -8,7 +8,7 @@ actual pipeline (validate, generate, compile, sign) is a call into the
 programmatic surface is :mod:`mcuhome.api`.
 """
 
-#: This package's own version. ``mcuhome --version`` deliberately reports
-#: the *builder's* version instead — that is the number that determines
-#: what a build produces; the shell adds nothing to it.
+#: This package's own version — the first line of ``mcuhome --version``,
+#: which reports the whole stack, one line per part (cli ADR 0002 §5):
+#: the CLI, the workbench, the compiler (when installed), the model.
 __version__ = "0.1.0.dev0"
