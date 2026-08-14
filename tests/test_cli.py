@@ -2189,6 +2189,33 @@ def test_build_json_stream_reports_honest_stages(tmp_path, capsys) -> None:
     assert lines[-1]["document"]["ok"] is True
 
 
+def test_a_full_build_streams_the_compile_and_sign_stages(tmp_path, capsys, monkeypatch) -> None:
+    """The stage names are machine-facing vocabulary, pinned like the verbs.
+
+    A consumer keys its progress display on them, so renaming one is a
+    breaking change to the append-only stream contract — this is the
+    end-to-end pin over the default (container) build path.
+    """
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
+    _fake_imgtool(monkeypatch, tmp_path)
+    argv = ["build", str(EXAMPLE), "--build-dir", str(tmp_path / "out")]
+    argv += ["--signing-key", str(_private_key(tmp_path)), "-o", "json-stream"]
+    assert main(argv) == 0
+    lines = _stream_lines(capsys.readouterr().out)
+    assert lines[0]["verb"] == "start"
+    assert lines[0] == {
+        "verb": "start",
+        "task": "build",
+        "device": "bmp180-node",
+        "method": "local",
+    }
+    stages = [line["stage"] for line in lines if line["verb"] == "progress"]
+    assert stages == ["compile", "sign"]
+    assert lines[-1]["verb"] == "result"
+    assert lines[-1]["document"]["ok"] is True
+    assert lines[-1]["document"]["signed"] is True
+
+
 def test_a_failure_in_json_stream_is_error_verbs_plus_the_failure_document(
     tmp_path, capsys
 ) -> None:
