@@ -571,8 +571,8 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
 
     def refuse(model, **kwargs):
         raise localbuild.lb.BuildError(
-            f"No build container on this host answers to {kwargs['image']}.",
-            hint="pull or build the image, or point --container-image at one",
+            f"The build container {kwargs['image']} is missing on this host.",
+            hint="pull the image, then rerun the build",
         )
 
     monkeypatch.setattr(buildmethods, "compose_local_build", refuse)
@@ -592,7 +592,7 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
         == 1
     )
     captured = capsys.readouterr()
-    assert "answers to" in captured.err
+    assert "is missing on this host" in captured.err
     assert "Traceback" not in captured.err
 
 
