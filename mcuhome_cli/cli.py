@@ -1310,13 +1310,7 @@ def _sign_after_build(
             out_dir, key=key, env=env, project=project
         )
         return _Signed(signed=list(plan.outputs), ota=ota_image, manifest=data)
-    plan = imgtool.sign_report(
-        out_dir,
-        key=key,
-        env=env,
-        project=project,
-        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
-    )
+    plan = imgtool.sign_report(out_dir, key=key, env=env, project=project)
     signed = list(plan.outputs)
     signed_bin = next((path for path in signed if path.suffix == ".bin"), None)
     ota_image = (
@@ -1552,17 +1546,7 @@ def _apply_manifest_signature(
     own parameters, so the machine that runs this needs neither the device
     configuration nor the Matter SDK.
     """
-    plan = imgtool.sign_build(
-        target,
-        key=key,
-        env=env,
-        project=project,
-        # Where MCUboot's own imgtool would be, if this machine happens to
-        # be a west workspace. It usually is not: signing runs where the
-        # key is (ADR 0015 decision 8), and imgtool.sign_build no longer
-        # goes looking by itself.
-        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
-    )
+    plan = imgtool.sign_build(target, key=key, env=env, project=project)
     data = manifest_module.record_signature(
         manifest_module.read_manifest(plan.manifest_path), out_dir=plan.out_dir, files=plan.outputs
     )
@@ -1691,13 +1675,7 @@ def _cmd_sign_report(args: argparse.Namespace, target: Path, project: api.Projec
     no OTA block to wrap — those belong to ``mcuhome build``, which does
     both in one step, or to the machine that holds the device model.
     """
-    plan = imgtool.sign_report(
-        target,
-        key=args.signing_key,
-        env=_process_env(),
-        project=project,
-        topdir=workspace.find_topdir(workspace.installed_module_dir(), Path.cwd()),
-    )
+    plan = imgtool.sign_report(target, key=args.signing_key, env=_process_env(), project=project)
     print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
     for path in plan.outputs:
         print(f"  {path}")
