@@ -43,6 +43,7 @@ commands stay top-level.
 | `device first-time-setup <device>` | One-time board provisioning: builds and flashes our MCUboot bootloader using vendor-specific tooling — the one deliberate exception to "nothing toolchain-shaped on the host" (ADR 0002). Which tools per vendor, and how they are obtained, is analyzed later | stub |
 | `device init-pairing <device>` | Draws commissioning credentials once, into the project's secrets (`--force`, `--secrets` continue). Pairing codes are printed, never stored | exists |
 | `device list` | Lists the project's devices with their state | new |
+| `device boards` | Lists the boards MCUHome builds for, and the planned ones, from the registry — under `device` because boards only mean anything to a device (PO 2026-08-15) | new |
 | `schema [config\|registry]` | Emits the `main.yaml` JSON Schema or the registry as JSON | exists |
 | `public-key` | Prints/writes the public half of the signing key; never generates one | exists |
 | `doctor` | Environment diagnosis: docker reachable, image present, project valid, permissions sane — the "why does nothing work" command | new |
@@ -103,7 +104,11 @@ The whole of §2 and §4 landed as one step. What the table left open:
 - **Mode-specific `device build` flags**: `--build-server` and
   `--build-token` (remote), `--workspace` (local-dev; optional — the
   discovery from the install location and the working directory stays
-  the default), `--image` (local). The rungs do not mix: a mode flag
+  the default), `--container-image` (local; spelled out because a bare
+  "image" means firmware in this tool — PO 2026-08-15, renamed from
+  `--image` without alias; the builder-list key stays `image`, scoped
+  by its `type: local` block, and so does the compiler's
+  `MCUHOME_BUILDER_IMAGE`). The rungs do not mix: a mode flag
   without `--build-mode` — or beside the wrong mode, or `--builder`
   together with `--build-mode`, or `--build-mode remote` without
   `--build-server` — is an exit-2 refusal in the validate phase, and
@@ -145,6 +150,43 @@ The whole of §2 and §4 landed as one step. What the table left open:
   `--method`/`--server`/`--token` spellings are gone; user-facing
   texts in all repos (hints, docstrings, scaffold) speak this ADR's
   vocabulary.
+
+## Pinned in the usability round (PO feedback, 2026-08-15)
+
+The product owner's first hands-on pass over the C2 surface; each item
+is a decision, not a style preference.
+
+- **The help contract.** A usage line *identifies* rather than
+  enumerates: positionals plus required flags plus `[options]`, and a
+  usage error appends "Run … --help for the full option list" instead
+  of re-listing everything. In `--help` itself, the command's own
+  options come first and the shared flags (`-h`, `-o`,
+  `--project-dir`, `-v`, `--color`, `--interactive`) sit apart as a
+  *general options* group below. And `-h`/`--help` wins wherever it
+  stands — scanned before the parse, so `device new --board -h` helps
+  instead of complaining about `--board`'s missing value; only a `--`
+  separator ends the scan. Help returns exit 0 as a plain return, not
+  an argparse `SystemExit`.
+- **Refusal order.** The project is resolved first at runtime, before
+  any command-specific validation — outside a project the user hears
+  *that*, once, not after every corrected argument. Parser syntax
+  errors (exit 2) stay ahead of it, the convention of every CLI: a
+  syntactically broken invocation has no command yet.
+- **`mcuhome init` rendering**: created files first, then directories
+  with a trailing slash, painted in ls's blue when color is on; the
+  next-steps point at `device new --help` and `mcuhome --help` (whose
+  epilog carries the workflow) rather than at an argument the reader
+  cannot fill in yet.
+- **Stable links** (`t.mcuhome.org`, the project's *target* host —
+  workspace decision): pages a shipped binary links to, one path per
+  page, versioned by this CLI's `major.minor`
+  (`…/docs/getting-started/0.1`). Static content today, redirects to
+  docs.mcuhome.org once that exists; the repository behind it is
+  github.com/mcu-home/t.mcuhome.org.
+- **Board discoverability**: `device boards` (table row above) answers
+  from `registry.BOARDS`/`PLANNED_BOARDS`, and `--board`'s help and the
+  unknown-board refusal point at it. Deliberately not a link to
+  Zephyr's board list: MCUHome accepts only boards it has brought up.
 
 ## Open points
 

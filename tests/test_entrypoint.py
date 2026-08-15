@@ -36,6 +36,7 @@ DEVICE_COMMANDS = [
     "first-time-setup",
     "init-pairing",
     "list",
+    "boards",
 ]
 CONFIG_COMMANDS = ["print", "get", "set", "unset"]
 
@@ -50,33 +51,27 @@ def test_the_console_script_points_at_this_package() -> None:
 
 
 def test_top_level_help_works(capsys) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main(["--help"])
-    assert caught.value.code == 0
+    # Help is the pre-parse scan's answer (PO 2026-08-15): a plain
+    # return, not argparse's SystemExit.
+    assert main(["--help"]) == 0
     assert "usage: mcuhome" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("command", TOP_LEVEL)
 def test_every_top_level_command_has_help(capsys, command: str) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main([command, "--help"])
-    assert caught.value.code == 0
+    assert main([command, "--help"]) == 0
     assert f"usage: mcuhome {command}" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("command", DEVICE_COMMANDS)
 def test_every_device_command_has_help(capsys, command: str) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main(["device", command, "--help"])
-    assert caught.value.code == 0
+    assert main(["device", command, "--help"]) == 0
     assert f"usage: mcuhome device {command}" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("command", CONFIG_COMMANDS)
 def test_every_config_command_has_help(capsys, command: str) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main(["config", command, "--help"])
-    assert caught.value.code == 0
+    assert main(["config", command, "--help"]) == 0
     assert f"usage: mcuhome config {command}" in capsys.readouterr().out
 
 
@@ -104,8 +99,7 @@ def test_a_bare_noun_prints_its_help_and_succeeds(capsys) -> None:
 
 def test_build_help_advertises_the_probed_flags(capsys) -> None:
     """The flags a machine driving the command feature-probes for."""
-    with pytest.raises(SystemExit):
-        main(["device", "build", "--help"])
+    assert main(["device", "build", "--help"]) == 0
     out = capsys.readouterr().out
     for flag in (
         "--model",
@@ -115,6 +109,7 @@ def test_build_help_advertises_the_probed_flags(capsys) -> None:
         "--project-dir",
         "--builder",
         "--build-mode",
+        "--container-image",
     ):
         assert flag in out
     assert "--json" not in out
@@ -144,3 +139,46 @@ def test_the_retired_spellings_are_gone(capsys) -> None:
             main(argv)
         assert caught.value.code == 2
         capsys.readouterr()
+
+
+# --------------------------------------------------------------------------
+# The help contract (PO 2026-08-15)
+# --------------------------------------------------------------------------
+
+
+def test_help_wins_wherever_it_stands(capsys) -> None:
+    """`--board -h` must help, not complain about --board's missing value."""
+    assert main(["device", "new", "--board", "-h"]) == 0
+    assert "usage: mcuhome device new" in capsys.readouterr().out
+
+
+def test_help_is_literal_after_the_separator(capsys) -> None:
+    """`--` ends the help scan: what follows is data, and parsing decides."""
+    with pytest.raises(SystemExit) as caught:
+        main(["device", "new", "--", "-h"])
+    assert caught.value.code == 2
+
+
+def test_usage_lines_identify_rather_than_enumerate(capsys) -> None:
+    """The usage line: positionals + required flags + [options], no more."""
+    assert main(["device", "new", "--help"]) == 0
+    usage = capsys.readouterr().out.splitlines()[0]
+    assert "--board TARGET" in usage
+    assert usage.endswith("[options]")
+    assert "--color" not in usage
+    assert "--name" not in usage
+
+
+def test_a_usage_error_points_at_help(capsys) -> None:
+    with pytest.raises(SystemExit) as caught:
+        main(["device", "new"])
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    assert "Run mcuhome device new --help for the full option list." in err
+
+
+def test_command_options_come_before_the_general_ones(capsys) -> None:
+    """The command's own options first, the shared ones as their own group."""
+    assert main(["device", "new", "--help"]) == 0
+    out = capsys.readouterr().out
+    assert 0 < out.index("--board") < out.index("general options:") < out.index("--color")

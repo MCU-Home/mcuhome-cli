@@ -21,6 +21,7 @@ surface.
     mcuhome device first-time-setup <d>  # stub (cli ADR 0003)
     mcuhome device init-pairing <device> # draw commissioning credentials
     mcuhome device list                  # the project's devices, with state
+    mcuhome device boards                # what MCUHome can build for
     mcuhome public-key                   # the public half of the signing key
     mcuhome schema           [what]      # the schema and the registry, as JSON
     mcuhome doctor                       # environment diagnosis
@@ -39,7 +40,7 @@ step, without aliases (pre-1.0, the E62 rule).
 ``device build`` selects **where** to build through ADR 0023's ladder,
 most explicit wins: fully manual — ``--build-mode`` plus its
 mode-specific flags (``--build-server``/``--build-token`` for
-``remote``, ``--workspace`` for ``local-dev``, ``--image`` for
+``remote``, ``--workspace`` for ``local-dev``, ``--container-image`` for
 ``local``) — bypassing the builder list entirely; a named builder
 (``--builder NAME``); or the configured ``default_builder``, falling
 back to a plain ``local`` build. Builders are configuration (any layer
@@ -618,7 +619,7 @@ _MODE_FLAGS: tuple[tuple[str, str, str], ...] = (
     ("build_server", "--build-server", api.REMOTE),
     ("build_token", "--build-token", api.REMOTE),
     ("workspace", "--workspace", api.LOCAL_DEV),
-    ("image", "--image", api.LOCAL),
+    ("container_image", "--container-image", api.LOCAL),
 )
 
 
@@ -706,7 +707,7 @@ def _select_build(
             server=args.build_server,
             token=args.build_token,
             workspace=selected_workspace,
-            image=args.image,
+            image=args.container_image,
         )
     return api.resolve_builder(
         settings,
@@ -1427,7 +1428,6 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
     directory") — the one command where that flag may name a directory
     that is *not* a project yet, because making it one is the job.
     """
-    del output
     target = Path(args.directory)
     if args.directory == "." and args.project_dir is not None:
         target = args.project_dir
@@ -1437,11 +1437,19 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
         return phases.EXIT_OK
     result = api.init_project(target, force=args.force)
     print(f"Created an MCUHome project in {result.project.root}:")
-    for path in result.created:
-        print(f"  {path.relative_to(result.project.root)}")
+    # Files first, then directories with a trailing slash and ls's blue
+    # (PO 2026-08-15) — what was created is legible at a glance.
+    for path in sorted(result.created, key=lambda p: (p.is_dir(), str(p))):
+        shown = str(path.relative_to(result.project.root))
+        if path.is_dir():
+            shown = output.style(f"{shown}/", output_module.BLUE)
+        print(f"  {shown}")
     print()
     print(_("Next:"))
-    print(_("  mcuhome device new <device> --board TARGET    scaffold the first device"))
+    print(_("  mcuhome device new --help    how to describe your first device"))
+    print(_("  mcuhome --help               every command, and the workflow"))
+    print()
+    print(_("Getting started: {url}").format(url=_docs_url("getting-started")))
     return phases.EXIT_OK
 
 
@@ -1938,6 +1946,38 @@ def _cmd_device_list(args: argparse.Namespace, output: Output) -> int:
     return phases.EXIT_OK
 
 
+def _cmd_device_boards(args: argparse.Namespace, output: Output) -> int:
+    """The boards MCUHome can build for, from the registry (PO 2026-08-15).
+
+    The registry is the authority — a board entry carries MCUHome's own
+    bring-up knowledge (partitions, entropy, radio), so this list is
+    deliberately not "what Zephyr supports".
+    """
+    del args
+    supported = [
+        {"name": board.name, "transports": sorted(board.transports)}
+        for _name, board in sorted(registry.BOARDS.items())
+    ]
+    planned = [
+        {"name": name, "status": status} for name, status in sorted(registry.PLANNED_BOARDS.items())
+    ]
+    if output.machine:
+        output.result({"ok": True, "boards": supported, "planned": planned})
+        return phases.EXIT_OK
+    print(_("Boards MCUHome builds for:"))
+    rows = [(entry["name"], ", ".join(entry["transports"])) for entry in supported]
+    for line in output_module.format_table(rows).splitlines():
+        print(f"  {line}")
+    print()
+    print(_("Planned, not usable yet:"))
+    planned_rows = [(entry["name"], entry["status"]) for entry in planned]
+    for line in output_module.format_table(planned_rows).splitlines():
+        print(f"  {line}")
+    print()
+    print(_("Details: {url}").format(url=_docs_url("device-supported-boards")))
+    return phases.EXIT_OK
+
+
 #: How ``doctor`` paints each status word.
 _DOCTOR_STYLES = {
     "ok": output_module.GREEN,
@@ -2097,11 +2137,94 @@ def _show_help(parser: argparse.ArgumentParser):  # noqa: ANN202 - argparse call
     return show
 
 
+def _docs_url(page: str) -> str:
+    """A stable documentation link (PO 2026-08-15).
+
+    ``t.mcuhome.org`` is the project's target host: one path per page a
+    shipped binary links to, versioned with this CLI's major.minor and
+    kept alive for that binary's lifetime
+    (github.com/mcu-home/t.mcuhome.org).
+    """
+    return f"https://t.mcuhome.org/docs/{page}/{'.'.join(cli_version.split('.')[:2])}"
+
+
+class _HelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Usage lines that identify, not enumerate (PO 2026-08-15).
+
+    The usage line carries what an invocation *must* say — positionals
+    and required flags — and folds everything optional into
+    ``[options]``; the grouped option list below has the detail. The
+    raw-description base keeps the line breaks of the top-level
+    workflow epilog.
+    """
+
+    def _format_usage(self, usage, actions, groups, prefix):  # noqa: ANN001, ANN202
+        if usage is None:
+            shown = [action for action in actions if not action.option_strings or action.required]
+            if len(shown) < len(actions):
+                text = super()._format_usage(None, shown, groups, prefix)
+                return text.rstrip("\n") + " [options]\n\n"
+        return super()._format_usage(usage, actions, groups, prefix)
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse, with the project's help contract wired in.
+
+    Every parser in the tree renders through :class:`_HelpFormatter`
+    and registers ``-h`` itself (leaf commands list it under *general
+    options*), and a usage error points at ``--help`` instead of
+    re-listing every option.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
+        kwargs.setdefault("formatter_class", _HelpFormatter)
+        kwargs.setdefault("add_help", False)
+        super().__init__(*args, **kwargs)
+
+    def error(self, message: str):  # noqa: ANN202 - argparse contract
+        self.print_usage(sys.stderr)
+        hint = _("Run {prog} --help for the full option list.").format(prog=self.prog)
+        self.exit(phases.EXIT_USAGE, f"{self.prog}: error: {message}\n{hint}\n")
+
+
+def _help_parser(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.ArgumentParser:
+    """The parser whose help ``-h`` anywhere in *tokens* shows.
+
+    ``-h``/``--help`` wins wherever it stands (PO 2026-08-15) — even
+    where argparse would read it as a flag's missing value, as in
+    ``mcuhome device new --board -h``. The walk descends the command
+    tree for as long as tokens name subcommands and ignores everything
+    else.
+    """
+    current = parser
+    for token in tokens:
+        actions = current._actions
+        sub = next(
+            (action for action in actions if isinstance(action, argparse._SubParsersAction)),
+            None,
+        )
+        if sub is None:
+            break
+        if token in sub.choices:
+            current = sub.choices[token]
+    return current
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="mcuhome",
         description="Build Zephyr firmware from an MCUHome YAML device configuration.",
+        epilog=(
+            "the workflow:\n"
+            "  mcuhome init                 create a project directory\n"
+            "  mcuhome device new NAME      describe a device (device boards lists the targets)\n"
+            "  mcuhome device build NAME    compile its firmware\n"
+            "  mcuhome device flash NAME    put it on the board\n"
+            "\n"
+            f"getting started: {_docs_url('getting-started')}"
+        ),
     )
+    parser.add_argument("-h", "--help", action="help", help="show this help message and exit")
     parser.add_argument("--version", action=_StackVersion)
     parser.add_argument(
         "-v",
@@ -2111,8 +2234,38 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    def add_common_options(subparser: argparse.ArgumentParser) -> None:
-        subparser.add_argument(
+    def add_bare_help(noun_parser: argparse.ArgumentParser) -> None:
+        noun_parser.add_argument(
+            "-h", "--help", action="help", help="show this help message and exit"
+        )
+
+    def finish_options(subparser: argparse.ArgumentParser, *, output: bool = False) -> None:
+        """The options every command shares, apart from the command's own.
+
+        Called *after* a command's own arguments, so the help shows the
+        command-specific options first and the shared ones as their own
+        group below (PO 2026-08-15).
+        """
+        general = subparser.add_argument_group("general options")
+        general.add_argument("-h", "--help", action="help", help="show this help message and exit")
+        if output:
+            general.add_argument(
+                "-o",
+                "--output",
+                dest="output_mode",
+                choices=output_module.MODES,
+                default=output_module.HUMAN,
+                metavar="FORMAT",
+                help=(
+                    "output format (cli ADR 0004): human (the default), json — one "
+                    "machine-readable document on stdout after the run (failure form "
+                    '{"ok": false, "errors": [...]}) — or json-stream, NDJSON with the verbs '
+                    "start/progress/error/result as the run progresses. Exit codes do not "
+                    "change, logs go to stderr, and both machine forms force "
+                    "--no-interactive"
+                ),
+            )
+        general.add_argument(
             "--project-dir",
             type=Path,
             default=None,
@@ -2126,49 +2279,31 @@ def build_parser() -> argparse.ArgumentParser:
         # Also accepted after the subcommand, where people reach for it.
         # SUPPRESS so that leaving it out here does not overwrite the
         # value given before the subcommand.
-        subparser.add_argument(
+        general.add_argument(
             "-v",
             "--verbose",
             action="store_true",
             default=argparse.SUPPRESS,
             help="also print the resolved device model",
         )
-        subparser.add_argument(
+        general.add_argument(
             "--color",
             choices=("auto", "always", "never"),
             default="auto",
             help="color in human output (auto: only on a terminal; NO_COLOR is respected)",
         )
-        subparser.add_argument(
+        general.add_argument(
             "--interactive",
             dest="interactive",
             action="store_true",
             default=None,
             help="ask questions up front even when not attached to a terminal",
         )
-        subparser.add_argument(
+        general.add_argument(
             "--no-interactive",
             dest="interactive",
             action="store_false",
             help="never ask; a missing required input is then an exit-2 refusal",
-        )
-
-    def add_output_option(subparser: argparse.ArgumentParser) -> None:
-        subparser.add_argument(
-            "-o",
-            "--output",
-            dest="output_mode",
-            choices=output_module.MODES,
-            default=output_module.HUMAN,
-            metavar="FORMAT",
-            help=(
-                "output format (cli ADR 0004): human (the default), json — one "
-                "machine-readable document on stdout after the run (failure form "
-                '{"ok": false, "errors": [...]}) — or json-stream, NDJSON with the verbs '
-                "start/progress/error/result as the run progresses. Exit codes do not "
-                "change, logs go to stderr, and both machine forms force "
-                "--no-interactive"
-            ),
         )
 
     # ---- project-scoped, top-level (cli ADR 0003 §1) ---------------------
@@ -2188,7 +2323,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="proceed in a non-empty directory (existing files may be overwritten)",
     )
-    add_common_options(init_project_parser)
+    finish_options(init_project_parser)
     init_project_parser.set_defaults(func=_cmd_init)
 
     config_parser = subparsers.add_parser(
@@ -2196,6 +2331,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="read and write MCUHome configuration (five layers, ADR 0022)",
     )
     config_sub = config_parser.add_subparsers(dest="config_command")
+    add_bare_help(config_parser)
     config_parser.set_defaults(func=_show_help(config_parser))
 
     def add_scope_flags(subparser: argparse.ArgumentParser) -> None:
@@ -2226,16 +2362,14 @@ def build_parser() -> argparse.ArgumentParser:
     config_print_parser = config_sub.add_parser(
         "print", help="every effective option, with the layer each value came from"
     )
-    add_output_option(config_print_parser)
-    add_common_options(config_print_parser)
+    finish_options(config_print_parser, output=True)
     config_print_parser.set_defaults(func=_cmd_config_print)
 
     config_get_parser = config_sub.add_parser("get", help="one option's effective value")
     config_get_parser.add_argument(
         "name", help="the option, spelled as its configuration key (e.g. jobs)"
     )
-    add_output_option(config_get_parser)
-    add_common_options(config_get_parser)
+    finish_options(config_get_parser, output=True)
     config_get_parser.set_defaults(func=_cmd_config_get)
 
     config_set_parser = config_sub.add_parser(
@@ -2252,8 +2386,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     add_scope_flags(config_set_parser)
-    add_output_option(config_set_parser)
-    add_common_options(config_set_parser)
+    finish_options(config_set_parser, output=True)
     config_set_parser.set_defaults(func=_cmd_config_set)
 
     config_unset_parser = config_sub.add_parser(
@@ -2261,8 +2394,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     config_unset_parser.add_argument("name", help="the option to remove")
     add_scope_flags(config_unset_parser)
-    add_output_option(config_unset_parser)
-    add_common_options(config_unset_parser)
+    finish_options(config_unset_parser, output=True)
     config_unset_parser.set_defaults(func=_cmd_config_unset)
 
     # ---- the device noun (cli ADR 0003 §1/§2) ----------------------------
@@ -2271,6 +2403,7 @@ def build_parser() -> argparse.ArgumentParser:
         "device", help="device-scoped commands: new, validate, build, sign-firmware, ..."
     )
     device_sub = device_parser.add_subparsers(dest="device_command")
+    add_bare_help(device_parser)
     device_parser.set_defaults(func=_show_help(device_parser))
 
     new_parser = device_sub.add_parser(
@@ -2282,8 +2415,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="TARGET",
         help=(
-            "Zephyr board target this device runs on, verbatim "
-            f"(supported today: {', '.join(sorted(registry.BOARDS))})"
+            "Zephyr board target this device runs on, verbatim — "
+            "mcuhome device boards lists what MCUHome can build for"
         ),
     )
     new_parser.add_argument(
@@ -2295,7 +2428,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(default: the device name, title-cased)"
         ),
     )
-    add_common_options(new_parser)
+    finish_options(new_parser)
     new_parser.set_defaults(func=_cmd_new)
 
     validate_parser = device_sub.add_parser(
@@ -2304,8 +2437,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "device", help="device folder name, or the path of a device folder or YAML file"
     )
-    add_output_option(validate_parser)
-    add_common_options(validate_parser)
+    finish_options(validate_parser, output=True)
     validate_parser.set_defaults(func=_cmd_validate)
 
     build_parser_ = device_sub.add_parser("build", help="build firmware for a device")
@@ -2410,11 +2542,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     build_parser_.add_argument(
-        "--image",
+        "--container-image",
         metavar="REF",
         default=None,
         help=(
-            f"--build-mode local: builder image to compile in (default: {container.IMAGE}; "
+            f"--build-mode local: container image to compile in (default: {container.IMAGE}; "
             f"the {container.IMAGE_VAR} environment variable sets it too)"
         ),
     )
@@ -2476,8 +2608,7 @@ def build_parser() -> argparse.ArgumentParser:
             "--jobs beats them all"
         ),
     )
-    add_output_option(build_parser_)
-    add_common_options(build_parser_)
+    finish_options(build_parser_, output=True)
     build_parser_.set_defaults(func=_cmd_build, validate_input=_validate_build)
 
     sign_parser = device_sub.add_parser(
@@ -2503,7 +2634,7 @@ def build_parser() -> argparse.ArgumentParser:
             "already carries."
         ),
     )
-    add_common_options(sign_parser)
+    finish_options(sign_parser)
     sign_parser.set_defaults(func=_cmd_sign)
 
     flash_parser = device_sub.add_parser(
@@ -2519,7 +2650,7 @@ def build_parser() -> argparse.ArgumentParser:
             "(planned); ota: deliberately undefined for now"
         ),
     )
-    add_common_options(flash_parser)
+    finish_options(flash_parser)
     flash_parser.set_defaults(func=_cmd_flash)
 
     setup_parser = device_sub.add_parser(
@@ -2527,7 +2658,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="one-time board provisioning: our MCUboot via vendor tooling (stub, cli ADR 0003)",
     )
     setup_parser.add_argument("device", help="device folder name or path")
-    add_common_options(setup_parser)
+    finish_options(setup_parser)
     setup_parser.set_defaults(func=_cmd_first_time_setup)
 
     init_parser = device_sub.add_parser(
@@ -2551,13 +2682,18 @@ def build_parser() -> argparse.ArgumentParser:
             "with !secret, for a configuration that lives in version control"
         ),
     )
-    add_common_options(init_parser)
+    finish_options(init_parser)
     init_parser.set_defaults(func=_cmd_init_pairing)
 
     list_parser = device_sub.add_parser("list", help="list the project's devices with their state")
-    add_output_option(list_parser)
-    add_common_options(list_parser)
+    finish_options(list_parser, output=True)
     list_parser.set_defaults(func=_cmd_device_list)
+
+    boards_parser = device_sub.add_parser(
+        "boards", help="list the boards MCUHome can build for, and the planned ones"
+    )
+    finish_options(boards_parser, output=True)
+    boards_parser.set_defaults(func=_cmd_device_boards)
 
     # ---- environment-scoped, top-level -----------------------------------
 
@@ -2576,7 +2712,7 @@ def build_parser() -> argparse.ArgumentParser:
             "redirect it into a file"
         ),
     )
-    add_common_options(schema_parser)
+    finish_options(schema_parser)
     schema_parser.set_defaults(func=_cmd_schema)
 
     public_key_parser = subparsers.add_parser(
@@ -2596,15 +2732,14 @@ def build_parser() -> argparse.ArgumentParser:
             f"secrets/firmware/{signing.PRIVATE_KEY_FILE})"
         ),
     )
-    add_common_options(public_key_parser)
+    finish_options(public_key_parser)
     public_key_parser.set_defaults(func=_cmd_public_key)
 
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="environment diagnosis: project, configuration, builders, container, permissions",
     )
-    add_output_option(doctor_parser)
-    add_common_options(doctor_parser)
+    finish_options(doctor_parser, output=True)
     doctor_parser.set_defaults(func=_cmd_doctor)
 
     clean_parser = subparsers.add_parser(
@@ -2612,7 +2747,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     clean_parser.add_argument("device", nargs="?", help="device folder name or path")
     clean_parser.add_argument("--all", action="store_true", help="clean every device")
-    add_common_options(clean_parser)
+    finish_options(clean_parser)
     clean_parser.set_defaults(func=_cmd_clean)
 
     return parser
@@ -2620,7 +2755,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    tokens = sys.argv[1:] if argv is None else argv
+    # Help wins wherever it stands (PO 2026-08-15): scanned before the
+    # parse, because argparse would otherwise read `-h` as a flag's
+    # missing value (`--board -h`) and refuse instead of helping.
+    # Everything after a `--` separator is literal and never help.
+    limit = tokens.index("--") if "--" in tokens else len(tokens)
+    if any(token in ("-h", "--help") for token in tokens[:limit]):
+        named = [token for token in tokens[:limit] if token not in ("-h", "--help")]
+        _help_parser(parser, named).print_help()
+        return phases.EXIT_OK
+    args = parser.parse_args(tokens)
     output = output_module.resolve(
         mode=getattr(args, "output_mode", output_module.HUMAN),
         color=getattr(args, "color", "auto"),

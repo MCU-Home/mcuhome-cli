@@ -559,7 +559,7 @@ def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(buildmethods, "compose_local_build", capture)
     _fake_imgtool(monkeypatch, tmp_path)
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
-    argv += ["--build-mode", "local", "--image", "localhost/b:wip"]
+    argv += ["--build-mode", "local", "--container-image", "localhost/b:wip"]
     argv += ["--signing-key", str(_private_key(tmp_path))]
     assert main(argv) == 0
     assert seen["image"] == "localhost/b:wip"
@@ -572,7 +572,7 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
     def refuse(model, **kwargs):
         raise localbuild.lb.BuildError(
             f"No build container on this host answers to {kwargs['image']}.",
-            hint="pull or build the image, or point --image at one",
+            hint="pull or build the image, or point --container-image at one",
         )
 
     monkeypatch.setattr(buildmethods, "compose_local_build", refuse)
@@ -1537,8 +1537,7 @@ def test_build_from_a_model_reads_no_configuration_tree(tmp_path, monkeypatch) -
 
 def test_build_help_advertises_the_model_flag(capsys) -> None:
     """The build server feature-probes the help text for it."""
-    with pytest.raises(SystemExit):
-        main(["device", "build", "--help"])
+    assert main(["device", "build", "--help"]) == 0
     assert "--model" in capsys.readouterr().out
 
 
@@ -1690,7 +1689,7 @@ def _selection_args(**overrides) -> argparse.Namespace:
         "build_server": None,
         "build_token": None,
         "workspace": None,
-        "image": None,
+        "container_image": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -1766,7 +1765,7 @@ def _no_build_may_start(monkeypatch) -> None:
         (["--build-server", "10.0.0.5"], "needs --build-mode remote"),
         (["--build-token", "t"], "needs --build-mode remote"),
         (["--workspace", "/ws"], "needs --build-mode local-dev"),
-        (["--image", "ref"], "needs --build-mode local"),
+        (["--container-image", "ref"], "needs --build-mode local"),
         (["--build-mode", "remote", "--workspace", "/ws"], "--build-mode local-dev flag"),
         (["--build-mode", "remote"], "needs --build-server"),
         (["--build-mode", "local", "--build-server", "x"], "--build-mode remote flag"),
@@ -2182,8 +2181,7 @@ def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeyp
 
 def test_the_build_help_advertises_the_three_methods(capsys) -> None:
     """The command surface is the one machine-facing promise this package makes."""
-    with pytest.raises(SystemExit):
-        main(["device", "build", "--help"])
+    assert main(["device", "build", "--help"]) == 0
     out = capsys.readouterr().out
     for name in buildmethods.METHODS:
         assert name in out

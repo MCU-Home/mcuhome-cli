@@ -296,3 +296,39 @@ def test_sign_firmware_on_an_unrelated_directory_names_what_it_expected(
     assert "neither" in err
     assert "build-manifest.json" in err
     assert "build-report.json" in err
+
+
+# --------------------------------------------------------------------------
+# device boards / init rendering (PO 2026-08-15)
+# --------------------------------------------------------------------------
+
+
+def test_device_boards_lists_supported_and_planned(capsys) -> None:
+    """The registry's answer, plus the stable docs link."""
+    assert main(["device", "boards"]) == 0
+    out = capsys.readouterr().out
+    assert BOARD in out
+    assert "Planned, not usable yet:" in out
+    assert "https://t.mcuhome.org/docs/device-supported-boards/" in out
+
+
+def test_device_boards_as_a_document(capsys) -> None:
+    assert main(["device", "boards", "-o", "json"]) == 0
+    document = json.loads(capsys.readouterr().out)
+    assert document["ok"] is True
+    names = [entry["name"] for entry in document["boards"]]
+    assert BOARD in names
+    assert all("status" in entry for entry in document["planned"])
+
+
+def test_init_lists_files_first_and_marks_directories(tmp_path, capsys, monkeypatch) -> None:
+    """Files, then directories with a trailing slash (PO 2026-08-15)."""
+    monkeypatch.chdir(tmp_path)
+    assert main(["init"]) == 0
+    lines = [line.strip() for line in capsys.readouterr().out.splitlines()]
+    dirs = [line for line in lines if line.endswith("/")]
+    assert "devices/" in dirs
+    assert "secrets/" in dirs
+    file_positions = [lines.index(name) for name in (".gitignore", "mcuhome.yaml")]
+    assert max(file_positions) < min(lines.index(d) for d in dirs)
+    assert "Getting started: https://t.mcuhome.org/docs/getting-started/" in "\n".join(lines)

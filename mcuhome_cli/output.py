@@ -69,6 +69,7 @@ MODES = (HUMAN, JSON, JSON_STREAM)
 RED = "31"
 GREEN = "32"
 YELLOW = "33"
+BLUE = "34"
 BOLD = "1"
 
 
