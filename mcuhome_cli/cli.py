@@ -2141,11 +2141,14 @@ def _docs_url(page: str) -> str:
     """A stable documentation link (PO 2026-08-15).
 
     ``t.mcuhome.org`` is the project's target host: one path per page a
-    shipped binary links to, versioned with this CLI's major.minor and
-    kept alive for that binary's lifetime
+    shipped binary links to, under the scheme
+    ``/<source-repo>/<target-area>/<target-detail>/<version>`` — the
+    linking tool is part of a link's identity (the dashboard's
+    getting-started page is not this CLI's), and the version is this
+    CLI's major.minor. Paths are kept alive for the binary's lifetime
     (github.com/mcu-home/t.mcuhome.org).
     """
-    return f"https://t.mcuhome.org/docs/{page}/{'.'.join(cli_version.split('.')[:2])}"
+    return f"https://t.mcuhome.org/cli/docs/{page}/{'.'.join(cli_version.split('.')[:2])}"
 
 
 class _HelpFormatter(argparse.RawDescriptionHelpFormatter):

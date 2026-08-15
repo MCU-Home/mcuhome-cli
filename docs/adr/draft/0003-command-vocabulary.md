@@ -178,11 +178,13 @@ is a decision, not a style preference.
   epilog carries the workflow) rather than at an argument the reader
   cannot fill in yet.
 - **Stable links** (`t.mcuhome.org`, the project's *target* host —
-  workspace decision): pages a shipped binary links to, one path per
-  page, versioned by this CLI's `major.minor`
-  (`…/docs/getting-started/0.1`). Static content today, redirects to
-  docs.mcuhome.org once that exists; the repository behind it is
-  github.com/mcu-home/t.mcuhome.org.
+  workspace decision): pages a shipped binary links to, under the
+  scheme `/<source-repo>/<target-area>/<target-detail>/<version>` —
+  the linking tool is part of a link's identity (the dashboard's
+  getting-started is not the CLI's), the version is the linking tool's
+  `major.minor` (`…/cli/docs/getting-started/0.1`). Static content
+  today, redirects to docs.mcuhome.org once that exists; the
+  repository behind it is github.com/mcu-home/t.mcuhome.org.
 - **Board discoverability**: `device boards` (table row above) answers
   from `registry.BOARDS`/`PLANNED_BOARDS`, and `--board`'s help and the
   unknown-board refusal point at it. Deliberately not a link to

@@ -309,7 +309,7 @@ def test_device_boards_lists_supported_and_planned(capsys) -> None:
     out = capsys.readouterr().out
     assert BOARD in out
     assert "Planned, not usable yet:" in out
-    assert "https://t.mcuhome.org/docs/device-supported-boards/" in out
+    assert "https://t.mcuhome.org/cli/docs/device-supported-boards/" in out
 
 
 def test_device_boards_as_a_document(capsys) -> None:
@@ -331,4 +331,4 @@ def test_init_lists_files_first_and_marks_directories(tmp_path, capsys, monkeypa
     assert "secrets/" in dirs
     file_positions = [lines.index(name) for name in (".gitignore", "mcuhome.yaml")]
     assert max(file_positions) < min(lines.index(d) for d in dirs)
-    assert "Getting started: https://t.mcuhome.org/docs/getting-started/" in "\n".join(lines)
+    assert "Getting started: https://t.mcuhome.org/cli/docs/getting-started/" in "\n".join(lines)
