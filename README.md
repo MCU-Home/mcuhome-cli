@@ -23,7 +23,8 @@ mcuhome device new         <device>      # scaffold a device folder
 mcuhome device validate    <device>      # stages 1-3, prints a summary
 mcuhome device build       <device>      # stages 1-5, a flashable image
 mcuhome device sign-firmware <device|path>   # apply the signature afterwards
-mcuhome device init-pairing <device>    # draw commissioning credentials
+mcuhome device matter-pairing <device>  # show this device's commissioning codes
+mcuhome device matter-pairing --new <device>  # draw fresh commissioning credentials
 mcuhome device list                     # list project devices with status
 mcuhome public-key                      # the public half of the signing key
 mcuhome schema             [config|registry]  # the schema and the registry, as JSON

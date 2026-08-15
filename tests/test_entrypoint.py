@@ -34,7 +34,7 @@ DEVICE_COMMANDS = [
     "sign-firmware",
     "flash",
     "first-time-setup",
-    "init-pairing",
+    "matter-pairing",
     "list",
     "boards",
 ]
@@ -125,6 +125,7 @@ def test_the_retired_spellings_are_gone(capsys) -> None:
         ["sign", "x"],
         ["new", "x"],
         ["init-pairing", "x"],
+        ["device", "init-pairing", "x"],
     ):
         with pytest.raises(SystemExit) as caught:
             main(argv)

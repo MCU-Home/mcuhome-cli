@@ -692,13 +692,22 @@ def test_clean_refuses_cleanly(capsys) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_validate_prints_the_pairing_codes(capsys) -> None:
+def test_validate_masks_the_pairing_codes(capsys) -> None:
+    """PO 2026-08-15: passing-by output hides the codes; the explicit ask shows them."""
     assert main(["device", "validate", str(EXAMPLE)]) == 0
     out = capsys.readouterr().out
     assert "Commissioning" in out
+    assert "34970112332" not in out
+    assert "MT:Y.K90AFN00KA0648G00" not in out
+    assert "matter-pairing" in out
+    assert "discriminator  3840 (0xF00)" in out  # broadcast in the clear anyway
+
+
+def test_show_sensitive_prints_the_pairing_codes(capsys) -> None:
+    assert main(["device", "validate", str(EXAMPLE), "--show-sensitive"]) == 0
+    out = capsys.readouterr().out
     assert "manual code    34970112332" in out
     assert "QR code        MT:Y.K90AFN00KA0648G00" in out
-    assert "discriminator  3840 (0xF00)" in out
 
 
 def test_the_published_test_credentials_are_called_out(capsys) -> None:
@@ -716,49 +725,74 @@ def test_build_prints_the_pairing_codes_last(tmp_path, capsys) -> None:
     assert main(argv_) == 0
     out = capsys.readouterr().out
     assert out.index("Commissioning") > out.index("Generated 12 files")
-    assert "MT:Y.K90AFN00KA0648G00" in out
+    # Masked (PO 2026-08-15): a build log passes by; matter-pairing shows codes.
+    assert "MT:Y.K90AFN00KA0648G00" not in out
+    assert "matter-pairing" in out
 
 
-def test_init_pairing_writes_the_codes_and_prints_them(tmp_path, capsys) -> None:
+def test_matter_pairing_new_writes_and_prints_the_codes(tmp_path, capsys) -> None:
     project = make_project(tmp_path / "config")
     (project / "devices" / "bench-node").mkdir(parents=True)
     entry = project / "devices" / "bench-node" / "main.yaml"
     entry.write_text(VALID_CONFIG.replace("    use_test_pairing: true\n", ""), "utf-8")
 
-    assert main(["device", "init-pairing", "bench-node", "--project-dir", str(project)]) == 0
+    argv_ = ["device", "matter-pairing", "bench-node", "--new", "--project-dir", str(project)]
+    assert main(argv_) == 0
     out = capsys.readouterr().out
     assert str(entry) in out
     assert "Commissioning" in out
     assert "manual code" in out
     assert "QR code        MT:" in out
+    # The values live in the device's own secrets file, not in main.yaml.
+    device_secrets = project / "secrets" / "devices" / "bench-node.yaml"
+    assert str(device_secrets) in out
+    assert "!secret matter_passcode" in entry.read_text("utf-8")
+    assert "matter_passcode:" in device_secrets.read_text("utf-8")
 
-    # The device now builds, and the codes it reports are the ones just
-    # written — the loop that makes the credentials ordinary input.
+    # The device now validates, and the bare command shows the same codes —
+    # the explicit ask that stays unmasked (PO 2026-08-15).
     assert main(["device", "validate", "bench-node", "--project-dir", str(project)]) == 0
+    capsys.readouterr()
+    assert main(["device", "matter-pairing", "bench-node", "--project-dir", str(project)]) == 0
     assert out.splitlines()[3] in capsys.readouterr().out
 
 
-def test_init_pairing_refuses_a_second_time(tmp_path, capsys) -> None:
+def test_matter_pairing_bare_shows_the_codes_unmasked(tmp_path, capsys) -> None:
+    """The bare command is the explicit ask (PO 2026-08-15) — plain codes."""
     entry = tmp_path / "main.yaml"
     entry.write_text(VALID_CONFIG, "utf-8")
-    assert main(["device", "init-pairing", str(entry)]) == 1
+    assert main(["device", "matter-pairing", str(entry)]) == 0
+    out = capsys.readouterr().out
+    assert "manual code    34970112332" in out
+    assert "QR code        MT:Y.K90AFN00KA0648G00" in out
+
+
+def test_matter_pairing_new_refuses_a_second_time(tmp_path, capsys) -> None:
+    entry = tmp_path / "main.yaml"
+    entry.write_text(VALID_CONFIG, "utf-8")
+    assert main(["device", "matter-pairing", str(entry), "--new"]) == 1
     captured = capsys.readouterr()
     assert "already has commissioning credentials" in captured.err
     assert "--force" in captured.err
     assert entry.read_text("utf-8") == VALID_CONFIG
 
 
-def test_init_pairing_with_secrets_writes_two_files(tmp_path, capsys) -> None:
+def test_matter_pairing_force_needs_new(tmp_path, capsys) -> None:
     entry = tmp_path / "main.yaml"
-    entry.write_text(VALID_CONFIG.replace("    use_test_pairing: true\n", ""), "utf-8")
-    assert main(["device", "init-pairing", str(entry), "--secrets"]) == 0
+    entry.write_text(VALID_CONFIG, "utf-8")
+    assert main(["device", "matter-pairing", str(entry), "--force"]) == 2
+    assert "--new" in capsys.readouterr().err
 
-    out = capsys.readouterr().out
-    # A bare file's stand-in project is its own directory (ADR 0022), so
-    # the values land in secrets/main.yaml next to it.
-    assert str(tmp_path / "secrets" / "main.yaml") in out
-    assert "!secret bench_node_passcode" in entry.read_text("utf-8")
-    assert main(["device", "validate", str(entry)]) == 0
+
+def test_matter_pairing_without_matter_is_a_refusal(tmp_path, capsys) -> None:
+    """PO 2026-08-15: the command never switches Matter on behind the author."""
+    entry = tmp_path / "main.yaml"
+    text = VALID_CONFIG.replace("  matter:\n    enabled: true\n    use_test_pairing: true\n", "")
+    entry.write_text(text, "utf-8")
+    assert main(["device", "matter-pairing", str(entry), "--new"]) == 1
+    err = capsys.readouterr().err
+    assert "no matter: section" in err
+    assert "enabled: true" in err
 
 
 # --------------------------------------------------------------------------
@@ -773,6 +807,13 @@ def test_validate_json_prints_the_resolved_model(capsys) -> None:
     assert document["errors"] == []
     assert document["model"]["device"]["name"] == "bmp180-node"
     assert document["file"] == EXAMPLE.name
+    # The machine document stays COMPLETE — it is the wire form that
+    # device build --model consumes; masking is a human-output concern
+    # (PO 2026-08-15), and masked values here would build wrong firmware.
+    pairing_doc = document["model"]["network"]["pairing"]
+    assert pairing_doc["passcode"] == 20202021
+    assert pairing_doc["discriminator"] == 3840
+    assert pairing_doc["test_credentials"] is True
 
 
 def test_validate_json_suppresses_the_human_summary(capsys) -> None:
@@ -1348,7 +1389,7 @@ def test_init_then_new_is_the_whole_start(tmp_path, capsys, monkeypatch) -> None
 
     assert main(["device", "new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]) == 0
     out = capsys.readouterr().out
-    assert "mcuhome device init-pairing bench-node" in out
+    assert "mcuhome device matter-pairing --new bench-node" in out
     assert (tmp_path / "devices" / "bench-node" / "main.yaml").is_file()
 
 

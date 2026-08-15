@@ -35,13 +35,13 @@ commands stay top-level.
 |---|---|---|
 | `init` | Creates a project in the current (or `--project-dir`) directory: `mcuhome.yaml`, `devices/`, `secrets/` (mode 700) and a `.gitignore` containing `secrets/`. Warns and refuses on a non-empty directory; `--force` proceeds anyway | new |
 | `config` | Reads/writes configuration values; scopes `--system`, `--user`, `--project` (default project). `config print` resolves the full inheritance tree and shows every effective value with its origin layer | new |
-| `device new <device> --name NAME --board TARGET` | Scaffolds a device folder with a starter `main.yaml`. Draws **no** credentials (that is `init-pairing`'s job, so builds stay byte-identical). The human-readable `--name` is destined for the device's Matter identity (BasicInformation) — emitting it is the generator's job, a platform work item | exists (moves under `device`, gains `--name`) |
+| `device new <device> --name NAME --board TARGET` | Scaffolds a device folder with a starter `main.yaml`. Draws **no** credentials (that is `matter-pairing --new`'s job, so builds stay byte-identical). The human-readable `--name` is destined for the device's Matter identity (BasicInformation) — emitting it is the generator's job, a platform work item | exists (moves under `device`, gains `--name`) |
 | `device validate <device>` | Stages 1-3, diagnostics rendered per ADR 0004. Deliberately named `validate` (not `verify`) — `verify` is a session-protocol action and stays one | exists |
 | `device build <device>` | Builds through the selected builder: default builder, `--builder NAME`, or fully manual `--build-mode` + mode-specific flags — `--build-server`, `--build-token`, the workspace path (the rung is firmware ADR 0023's; the spellings are pinned here). Every build delivers an unsigned image plus one host-side signing step unless `--no-sign` defers it | exists (flags change) |
 | `device sign-firmware <device>` | Applies the detached signature to the device's last build with the local key (the `--signing-key` override continues; `--no-sign --public-key` stays a `build` flag pair) | exists (was `sign`) |
 | `device flash <device>` | Flashes the last built/signed firmware. `--flash-mode recovery` = our own MCUboot serial recovery over USB CDC — needs **no** vendor tools, the bootloader presents itself as a plain serial port and accepts DFU. `--flash-mode ota` = deliberately undefined for now | stub |
 | `device first-time-setup <device>` | One-time board provisioning: builds and flashes our MCUboot bootloader using vendor-specific tooling — the one deliberate exception to "nothing toolchain-shaped on the host" (ADR 0002). Which tools per vendor, and how they are obtained, is analyzed later | stub |
-| `device init-pairing <device>` | Draws commissioning credentials once, into the project's secrets (`--force`, `--secrets` continue). Pairing codes are printed, never stored | exists |
+| `device matter-pairing <device>` | Shows the device's Matter pairing codes — the one *explicit* ask, so it prints them in the clear. `--new` draws commissioning credentials once: `!secret` references into `main.yaml`, values into the device's own `secrets/devices/<name>.yaml` (`--force` with `--new` replaces). Refuses when Matter is off — it never switches a protocol on behind the author (PO 2026-08-15; renamed from `init-pairing`, `--secrets` retired: the secrets path is the only path) | exists (renamed 2026-08-15) |
 | `device list` | Lists the project's devices with their state | new |
 | `device boards` | Lists the boards MCUHome builds for, and the planned ones, from the registry — under `device` because boards only mean anything to a device (PO 2026-08-15) | new |
 | `schema [config\|registry]` | Emits the `main.yaml` JSON Schema or the registry as JSON | exists |
@@ -189,9 +189,24 @@ is a decision, not a style preference.
   from `registry.BOARDS`/`PLANNED_BOARDS`, and `--board`'s help and the
   unknown-board refusal point at it. Deliberately not a link to
   Zephyr's board list: MCUHome accepts only boards it has brought up.
+- **`device matter-pairing`** resolves the old `init-pairing` open
+  point (PO 2026-08-15): Matter in the name — a WiFi-only device of a
+  future protocol has no business with this command, and the old name
+  said nothing. Show by default, `--new` to draw, `--force` only
+  beside `--new` (alone it is an exit-2 refusal). Retired without
+  aliases: the `init-pairing` spelling and its `--secrets` flag.
+- **Sensitive output** (PO 2026-08-15): *passing-by* human output —
+  `device validate`'s summary, the pairing reminder at the end of a
+  build — masks the pairing codes (manual code, QR payload); the
+  discriminator stays, the device broadcasts it anyway. The explicit
+  asks show them: `device matter-pairing`, or `validate
+  --show-sensitive`. The machine documents (`-o json`) stay complete
+  on purpose — `validate -o json` is the wire form `device build
+  --model` consumes, and masked values there would build wrong
+  firmware. Coupling masking generally to `!secret` provenance is a
+  named later step: it needs provenance through the resolved model,
+  which the loader deliberately erases today.
 
 ## Open points
 
-- `device init-pairing` naming (keep, or fold under a future
-  credentials noun) — revisit when secrets tooling grows.
 - `clean` semantics (what exactly is removed, per builder type).

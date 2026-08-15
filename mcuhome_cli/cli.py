@@ -19,7 +19,7 @@ surface.
     mcuhome device sign-firmware <t>     # apply the signature afterwards
     mcuhome device flash     <device>    # stub (cli ADR 0003)
     mcuhome device first-time-setup <d>  # stub (cli ADR 0003)
-    mcuhome device init-pairing <device> # draw commissioning credentials
+    mcuhome device matter-pairing <dev>  # pairing codes; --new draws credentials
     mcuhome device list                  # the project's devices, with state
     mcuhome device boards                # what MCUHome can build for
     mcuhome public-key                   # the public half of the signing key
@@ -97,10 +97,11 @@ project's ``.gitignore``): ``<project>/build/<device>/`` unless
 ``--build-dir`` says otherwise. Inside it, the generated application is
 ``app/`` and the compiler's working tree is ``build/`` — everything a
 human is meant to read on one side, machine spoil on the other.
-``device init-pairing`` is the one command that writes into the
-project's *configuration*, and it writes into exactly one file — the
-device's own — plus, with ``--secrets``, the project's
-``secrets/main.yaml`` (:mod:`mcuhome.workbench.provision`).
+``device matter-pairing --new`` is the one command that writes into the
+project's *configuration*, and it writes into exactly two files: the
+device's own ``main.yaml`` (``!secret`` references) and the device's
+``secrets/devices/<name>.yaml`` with the values
+(:mod:`mcuhome.workbench.provision`).
 ``config set``/``unset`` write one configuration file per invocation —
 the named scope's — and nothing else.
 """
@@ -271,14 +272,32 @@ def _cluster_unit(cluster_id: int) -> tuple[str, float]:
     return "", 1.0  # pragma: no cover - every generated cluster is known
 
 
-def format_commissioning(credentials: PairingModel) -> str:
+def format_commissioning(credentials: PairingModel, *, masked: bool = False) -> str:
     """The two strings a human needs to add the device to a controller.
 
     Printed, never written: the builder keeps no record of a device's
     codes beyond the configuration file the user owns and the firmware it
-    compiles. Anyone holding either of those holds the passcode, which is
-    what makes them worth saying out loud here.
+    compiles. Anyone holding either of those holds the passcode — which
+    is why output that merely passes by (validate, build) masks the
+    codes by default (PO 2026-08-15) and only the explicit ask shows
+    them: ``mcuhome device matter-pairing``, or ``--show-sensitive``.
+    The discriminator stays visible either way — the device broadcasts
+    it in the clear.
     """
+    if masked:
+        hidden = _("hidden — mcuhome device matter-pairing <device> shows it")
+        lines = [
+            "Commissioning",
+            f"  manual code    {hidden}",
+            f"  QR code        {hidden}",
+            f"  discriminator  {credentials.discriminator} (0x{credentials.discriminator:03X})",
+        ]
+        if credentials.test_credentials:
+            lines.append(
+                "  NOTE: these are the credentials published with the Matter SDK. Anyone "
+                "who\n        knows them can commission this device — bench use only."
+            )
+        return "\n".join(lines)
     tuple_ = pairing.Pairing(
         discriminator=credentials.discriminator,
         passcode=credentials.passcode,
@@ -299,8 +318,12 @@ def format_commissioning(credentials: PairingModel) -> str:
     return "\n".join(lines)
 
 
-def format_summary(model: DeviceModel) -> str:
-    """The human-readable picture of a resolved device."""
+def format_summary(model: DeviceModel, *, masked: bool = True) -> str:
+    """The human-readable picture of a resolved device.
+
+    *masked* hides the pairing codes (PO 2026-08-15) — ``validate
+    --show-sensitive`` is the one caller that turns it off.
+    """
     lines: list[str] = []
     device = model.device
     lines.append(f"Device     {device.name} ({device.friendly_name})")
@@ -370,7 +393,7 @@ def format_summary(model: DeviceModel) -> str:
 
     if model.network.pairing is not None:
         lines.append("")
-        lines.append(format_commissioning(model.network.pairing))
+        lines.append(format_commissioning(model.network.pairing, masked=masked))
 
     if model.build.snippets or model.build.kconfig:
         lines.append("")
@@ -445,7 +468,7 @@ def _cmd_validate(args: argparse.Namespace, output: Output) -> int:
     if not result.ok:
         result.raise_errors()
     assert result.model is not None  # noqa: S101 - ok means there is one
-    print(format_summary(result.model))
+    print(format_summary(result.model, masked=not args.show_sensitive))
     if args.verbose:
         print()
         print(result.model.to_json(), end="")
@@ -1378,33 +1401,66 @@ def _detached_key_note(path: Path) -> str:
 
 
 def _print_commissioning(model: DeviceModel) -> None:
-    """The pairing codes, last, where a freshly built device needs them."""
+    """A masked pairing reminder, last, where a freshly built device needs it.
+
+    Masked on purpose (PO 2026-08-15): a build log is output that merely
+    passes by, and the explicit ask — mcuhome device matter-pairing —
+    shows the codes.
+    """
     if model.network.pairing is None:
         return
     print()
-    print(format_commissioning(model.network.pairing))
+    print(format_commissioning(model.network.pairing, masked=True))
 
 
-def _cmd_init_pairing(args: argparse.Namespace, output: Output) -> int:
+def _validate_matter_pairing(args: argparse.Namespace, output: Output) -> list[MCUHomeError]:
     del output
+    if args.force and not args.new:
+        return [
+            BuildError(
+                "--force replaces credentials, and only --new draws any.",
+                hint="mcuhome device matter-pairing --new <device> --force",
+            )
+        ]
+    return []
+
+
+def _cmd_matter_pairing(args: argparse.Namespace, output: Output) -> int:
+    """``mcuhome device matter-pairing``: show the codes, or draw new ones.
+
+    The bare command is the one *explicit* ask for the pairing codes —
+    everywhere else (validate, build) they are masked (PO 2026-08-15).
+    ``--new`` draws fresh credentials through the provision module:
+    ``!secret`` references into main.yaml, values into the device's own
+    secrets file.
+    """
     project, entry = api.find_device(
         args.device, env=_process_env(), cwd=Path.cwd(), project_dir=args.project_dir
     )
-    result = provision.init_pairing(
-        entry,
-        secrets_file=project.secrets_file,
-        use_secrets=args.secrets,
-        force=args.force,
-    )
-    verb = "Replaced the commissioning credentials in" if result.replaced else "Wrote"
+    if not args.new:
+        model = api.load_model(entry, project=project, on_warning=output.warn)
+        if not model.network.matter_enabled or model.network.pairing is None:
+            raise BuildError(
+                f"Matter is off for {args.device}, so it has no pairing.",
+                hint=(
+                    "switch it on under network: —\n    matter:\n      enabled: true\n"
+                    "  and draw credentials: mcuhome device matter-pairing --new "
+                    f"{args.device}"
+                ),
+            )
+        print(format_commissioning(model.network.pairing))
+        return phases.EXIT_OK
+    result = provision.init_pairing(entry, secrets_file=project.secrets_file, force=args.force)
+    verb = "Replaced the commissioning credentials for" if result.replaced else "Wrote"
     print(f"{verb} {result.entry}.")
-    if result.secrets_file is not None:
-        print(f"The values themselves are in {result.secrets_file}.")
+    print(
+        f"The values live in {result.secrets_file}; the configuration carries !secret references."
+    )
     print()
     print(format_commissioning(_pairing_model(result.pairing)))
     print()
     print(
-        "Keep the configuration safe: it is the only copy. Anyone who has it — or the "
+        "Keep the secrets file safe: it is the only copy. Anyone who has it — or the "
         "firmware\nbuilt from it — can commission this device."
     )
     return 0
@@ -1466,7 +1522,7 @@ def _cmd_new(args: argparse.Namespace, output: Output) -> int:
     print(f"Wrote {created.entry}.")
     print()
     print(_("Next:"))
-    print(f"  mcuhome device init-pairing {created.name}    draw this device's commissioning codes")
+    print(f"  mcuhome device matter-pairing --new {created.name}    draw its commissioning codes")
     print(f"  mcuhome device validate {created.name}        see what it resolves to")
     print(f"  mcuhome device build {created.name}           compile it")
     print()
@@ -2440,6 +2496,14 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "device", help="device folder name, or the path of a device folder or YAML file"
     )
+    validate_parser.add_argument(
+        "--show-sensitive",
+        action="store_true",
+        help=(
+            "print the pairing codes in the clear (they are masked by default; "
+            "mcuhome device matter-pairing shows them too)"
+        ),
+    )
     finish_options(validate_parser, output=True)
     validate_parser.set_defaults(func=_cmd_validate)
 
@@ -2664,29 +2728,29 @@ def build_parser() -> argparse.ArgumentParser:
     finish_options(setup_parser)
     setup_parser.set_defaults(func=_cmd_first_time_setup)
 
-    init_parser = device_sub.add_parser(
-        "init-pairing",
-        help="draw this device's commissioning credentials and write them into its configuration",
+    pairing_parser = device_sub.add_parser(
+        "matter-pairing",
+        help="show this device's Matter pairing codes, or draw new commissioning credentials",
     )
-    init_parser.add_argument("device", help="device folder name or path")
-    init_parser.add_argument(
+    pairing_parser.add_argument("device", help="device folder name or path")
+    pairing_parser.add_argument(
+        "--new",
+        action="store_true",
+        help=(
+            "draw fresh commissioning credentials: the values go to the device's own "
+            "secrets/devices/<name>.yaml, the configuration gets !secret references"
+        ),
+    )
+    pairing_parser.add_argument(
         "--force",
         action="store_true",
         help=(
-            "replace credentials that are already there (every controller that knows "
-            "the device has to commission it again)"
+            "with --new: replace credentials that are already there (every controller "
+            "that knows the device has to commission it again)"
         ),
     )
-    init_parser.add_argument(
-        "--secrets",
-        action="store_true",
-        help=(
-            "put the values in the project's secrets/main.yaml and reference them "
-            "with !secret, for a configuration that lives in version control"
-        ),
-    )
-    finish_options(init_parser)
-    init_parser.set_defaults(func=_cmd_init_pairing)
+    finish_options(pairing_parser)
+    pairing_parser.set_defaults(func=_cmd_matter_pairing, validate_input=_validate_matter_pairing)
 
     list_parser = device_sub.add_parser("list", help="list the project's devices with their state")
     finish_options(list_parser, output=True)
