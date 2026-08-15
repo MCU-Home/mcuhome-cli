@@ -57,6 +57,10 @@ def _fake_local_run(model, **kwargs):
     deliberately not among the arguments a build ever receives — the whole
     point of the local path — so this fake never sees one either.
     """
+    if kwargs.get("on_step") is not None:
+        # The real composition's two step emissions, in its order.
+        kwargs["on_step"]("context")
+        kwargs["on_step"]("compile")
     work_root = Path(kwargs["work_root"])
     out = work_root / "backend" / "inv" / "out"
     out.mkdir(parents=True, exist_ok=True)
@@ -2305,7 +2309,7 @@ def test_a_full_build_streams_the_compile_and_sign_stages(tmp_path, capsys, monk
         "method": "local",
     }
     stages = [line["stage"] for line in lines if line["verb"] == "progress"]
-    assert stages == ["compile", "sign"]
+    assert stages == ["context", "compile", "artifacts", "sign"]
     assert lines[-1]["verb"] == "result"
     assert lines[-1]["document"]["ok"] is True
     assert lines[-1]["document"]["signed"] is True

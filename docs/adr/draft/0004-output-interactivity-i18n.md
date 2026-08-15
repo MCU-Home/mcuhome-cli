@@ -173,9 +173,44 @@ keys — is never translated.
   asks questions yet, so the interact phase is empty everywhere — the
   contract and its forcing rules are in place and tested.
 
+## The live build view (PO 2026-08-15)
+
+A build is minutes of someone else's output; the two questions a person
+has — how far along, and where is this running — got no answer while
+the compile log scrolled the terminal away. Decided and built
+(`mcuhome_cli/buildview.py`):
+
+- **Step line.** Every build states its steps up front and repaints
+  them in place: green done, yellow running, red failed, plain pending.
+  Each label carries the execution place — `compile (container
+  zephyr-4.4.0-r8)`, `compile (remote attic)`, `compile (local west)`,
+  `sign (local)` — because making *where* visible is half the point.
+- **The window.** The build log shows through a fixed 15-line frame
+  (`WINDOW_LINES`), newest at the bottom, repainted in place
+  (docker-build style, plain ANSI, throttled, thread-safe). On finish
+  the frame collapses to the step line + log pointer; the summary
+  prints below. On failure it collapses, the log **tail** is printed
+  back (the frame's scrollback is gone with it), then the refusal — the
+  things worth keeping are what remains.
+- **`build.log` always.** The full log goes to `build.log` in the build
+  directory in every mode and method; the line under the step line says
+  so. The file is contract, the frame is rendering.
+- **Degradation.** The live view runs only on an interactive human run
+  (ADR §3 detection). Non-TTY, `--no-interactive` and the machine modes
+  keep the linear behavior: log lines pass through (stdout human,
+  stderr machine), steps stay silent in linear human runs and travel as
+  `progress` verbs in the stream.
+- **The honest-progress seam.** `BuildRequest.on_step` (workbench):
+  the build methods state `context` and `compile` themselves; the CLI
+  adds `artifacts` and `sign`. Stage names are append-only stream
+  vocabulary like the verbs; `-o json-stream` gained `context` and
+  `artifacts` (additive).
+
 ## Open points
 
 - The exact JSON document schemas per command (the old build/validate
   envelopes are the starting point) are pinned during implementation.
 - `question`/`answer` stream verbs: deferred; design only when a
   consumer actually needs them.
+- The live view covers `device build`; extending it to `flash`/
+  `first-time-setup` happens when those stop being stubs.

@@ -139,8 +139,8 @@ from mcuhome.workbench.loader import load_yaml_file
 from mcuhome.workbench.project import check_secret_file
 
 from mcuhome_cli import __version__ as cli_version
+from mcuhome_cli import buildview, phases
 from mcuhome_cli import output as output_module
-from mcuhome_cli import phases
 from mcuhome_cli.i18n import _
 from mcuhome_cli.output import Output
 
@@ -740,6 +740,25 @@ def _select_build(
     )
 
 
+def _print_log_tail(view: object, log_path: Path) -> None:
+    """After a live frame collapsed on failure, restore the log's tail.
+
+    The linear views scrolled the whole log past already, so only the
+    live frame owes the reader this. It runs inside an exception
+    handler, so its own trouble (a closed stdout, say) must never
+    replace the build failure it is decorating.
+    """
+    try:
+        if not isinstance(view, buildview.LiveView):
+            return
+        tail = buildview.log_tail(log_path)
+        if tail:
+            print(tail)
+            print()
+    except Exception:  # noqa: BLE001 - deliberately silent, see docstring
+        pass
+
+
 def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
     """Run one build method and wait for it.
 
@@ -859,6 +878,19 @@ def _build_local_dev(
     jobs, jobs_source = _resolve_jobs(settings)
     bootloader_snippets = () if scheme is None else scheme.bootloader_snippets
 
+    steps = [
+        buildview.BuildStep("validate", "validate", state=buildview.DONE),
+        buildview.BuildStep("generate", "generate", state=buildview.DONE),
+        buildview.BuildStep("compile", "compile (local west)"),
+    ]
+    if not args.no_sign:
+        steps.append(buildview.BuildStep("sign", "sign (local)"))
+    view = buildview.make_view(steps, output=output, log_path=out_dir / buildview.LOG_FILE)
+
+    def on_step(stage: str) -> None:
+        output.progress(stage, device=model.device.name)
+        view.step(stage)
+
     def announce(plan: workspace.BuildPlan) -> None:
         """Say what is about to run — after every pre-flight refusal, before it."""
         if not output.machine:
@@ -868,55 +900,66 @@ def _build_local_dev(
             print(_key_note(key, public_key, output))
             print(f"  {' '.join(plan.command)}")
             print()
-        # The build log is written by a subprocess to the same terminal;
-        # flush so the header above it is not still sitting in this
-        # process's buffer.
+        # The build log is teed to the same terminal; flush so the header
+        # above it is not still sitting in this process's buffer.
         sys.stdout.flush()
-        output.progress("compile", device=model.device.name)
 
-    outcome = _run_method(
-        api.BuildRequest(
-            model=model,
-            # Absolute, because the build runs with the workspace top
-            # directory as its working directory (that is how west finds
-            # the manifest): a relative --build-dir would land somewhere
-            # else entirely for anyone who invoked mcuhome from a
-            # subdirectory.
-            out_dir=out_dir,
-            env=env,
-            jobs=jobs,
-            bootloader_key=bootloader_key,
-            snippets=snippets,
-            bootloader_snippets=bootloader_snippets,
-            # The library states neither of these for itself: `mcuhome` on
-            # a command line *is* the local-dev case (E18), and a command
-            # line is the one caller entitled to say "where I am installed"
-            # and "where I was run" — or, above, which workspace was chosen.
-            module_dir=module_dir,
-            started_in=started_in,
-            on_plan=announce,
-            # In the machine modes the compiler's own output would break
-            # the document, so it goes to stderr — where a log belongs
-            # anyway, and where a caller redirecting stdout into a file
-            # still sees progress.
-            stream=sys.stderr if output.machine else None,
-        ),
-        method=api.LOCAL_DEV,
-    )
-    result = outcome.detail
-    plan, log = result.plan, result.log
-    images, merged = result.images, result.merged
-    manifest_path = result.manifest_path
+    try:
+        outcome = _run_method(
+            api.BuildRequest(
+                model=model,
+                # Absolute, because the build runs with the workspace top
+                # directory as its working directory (that is how west finds
+                # the manifest): a relative --build-dir would land somewhere
+                # else entirely for anyone who invoked mcuhome from a
+                # subdirectory.
+                out_dir=out_dir,
+                env=env,
+                jobs=jobs,
+                bootloader_key=bootloader_key,
+                snippets=snippets,
+                bootloader_snippets=bootloader_snippets,
+                # The library states neither of these for itself: `mcuhome` on
+                # a command line *is* the local-dev case (E18), and a command
+                # line is the one caller entitled to say "where I am installed"
+                # and "where I was run" — or, above, which workspace was chosen.
+                module_dir=module_dir,
+                started_in=started_in,
+                on_plan=announce,
+                on_step=on_step,
+                # The compiler tees its subprocess output into this stream
+                # in-process, so the view receives it line by line — into
+                # the live frame, the linear passthrough (stdout for a
+                # human, stderr under a machine mode where stdout is the
+                # document), and always into build.log.
+                stream=buildview.ViewStream(view),
+            ),
+            method=api.LOCAL_DEV,
+        )
+        result = outcome.detail
+        plan, log = result.plan, result.log
+        images, merged = result.images, result.merged
+        manifest_path = result.manifest_path
 
-    # The one shared host-side signing step (E56), unless --no-sign.
-    ota_image = None
-    if not args.no_sign:
-        output.progress("sign", device=model.device.name)
-        ota_image = _sign_after_build(
-            model, out_dir, key=args.signing_key, env=env, report=outcome.report, project=project
-        ).ota
-        # Re-read so the artifact list now includes the freshly signed image.
-        images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
+        # The one shared host-side signing step (E56), unless --no-sign.
+        ota_image = None
+        if not args.no_sign:
+            on_step("sign")
+            ota_image = _sign_after_build(
+                model,
+                out_dir,
+                key=args.signing_key,
+                env=env,
+                report=outcome.report,
+                project=project,
+            ).ota
+            # Re-read so the artifact list now includes the freshly signed image.
+            images = workspace.build_images(plan.build_dir, app_image=plan.app_dir.name)
+    except BaseException:
+        view.close(success=False)
+        _print_log_tail(view, out_dir / buildview.LOG_FILE)
+        raise
+    view.close(success=True)
 
     if output.machine:
         output.result(
@@ -1033,51 +1076,85 @@ def _build_delivered(
         print(_key_note(key, public_key, output))
         print()
     sys.stdout.flush()
-    output.progress("compile", device=model.device.name)
 
-    def sink(line: str) -> None:
-        # The build log belongs on stderr in the machine modes (where
-        # stdout is the document) and on the terminal otherwise.
-        print(line, file=sys.stderr if output.machine else sys.stdout)
-
-    # A hidden scratch area under the build directory: the context and the
-    # session tree live here and are rebuilt each run; the durable
-    # artifacts are copied up into out_dir below.
-    outcome = _run_method(
-        api.BuildRequest(
-            model=model,
-            out_dir=out_dir,
-            env=env,
-            jobs=jobs,
-            signing_pub=signing_pub,
-            sdk_sources=settings.value("sdk_sources"),
-            image=None if remote else reference,
-            server=server,
-            token=token,
-            on_line=sink,
-        ),
-        method=method,
-    )
-    if not outcome.successful:
-        raise _delivered_build_failed(outcome)
-
-    copied = _collect_delivered_artifacts(outcome, out_dir)
-    report = imgtool.read_build_report(out_dir / outcome.report)
-
-    # Whatever an earlier build of this directory signed is (re)produced only
-    # on the signing branch below; drop any stale signed image and .ota first
-    # so a --no-sign run cannot leave a flashable lookalike beside the fresh
-    # unsigned firmware.
-    _drop_signed_lookalikes(out_dir)
-
-    signed: list[Path] = []
-    ota_image = None
+    # The step line of the live view (cli ADR 0004, PO 2026-08-15): each
+    # label carries where that step runs. Validation already happened —
+    # this function starts with a resolved model — so it opens settled.
+    where = f"remote {selection.builder.name}" if remote and selection.builder else None
+    if remote and where is None:
+        where = f"remote {server}" if server else "remote"
+    if not remote:
+        where = f"container {reference.rsplit(':', 1)[-1]}"
+    steps = [
+        buildview.BuildStep("validate", "validate", state=buildview.DONE),
+        buildview.BuildStep("context", "context"),
+        buildview.BuildStep("compile", f"compile ({where})"),
+        buildview.BuildStep("artifacts", "artifacts"),
+    ]
     if not args.no_sign:
-        output.progress("sign", device=model.device.name)
-        result = _sign_after_build(
-            model, out_dir, key=args.signing_key, env=env, report=outcome.report, project=project
+        steps.append(buildview.BuildStep("sign", "sign (local)"))
+    view = buildview.make_view(steps, output=output, log_path=out_dir / buildview.LOG_FILE)
+
+    def on_step(stage: str) -> None:
+        # One seam, two consumers: the machine modes get the honest
+        # `progress` verb, a live human run gets the repainted step line.
+        output.progress(stage, device=model.device.name)
+        view.step(stage)
+
+    try:
+        # A hidden scratch area under the build directory: the context and
+        # the session tree live here and are rebuilt each run; the durable
+        # artifacts are copied up into out_dir below.
+        outcome = _run_method(
+            api.BuildRequest(
+                model=model,
+                out_dir=out_dir,
+                env=env,
+                jobs=jobs,
+                signing_pub=signing_pub,
+                sdk_sources=settings.value("sdk_sources"),
+                image=None if remote else reference,
+                server=server,
+                token=token,
+                on_line=view.line,
+                on_step=on_step,
+            ),
+            method=method,
         )
-        signed, ota_image = result.signed, result.ota
+        if not outcome.successful:
+            raise _delivered_build_failed(outcome)
+
+        on_step("artifacts")
+        copied = _collect_delivered_artifacts(outcome, out_dir)
+        report = imgtool.read_build_report(out_dir / outcome.report)
+
+        # Whatever an earlier build of this directory signed is
+        # (re)produced only on the signing branch below; drop any stale
+        # signed image and .ota first so a --no-sign run cannot leave a
+        # flashable lookalike beside the fresh unsigned firmware.
+        _drop_signed_lookalikes(out_dir)
+
+        signed: list[Path] = []
+        ota_image = None
+        if not args.no_sign:
+            on_step("sign")
+            result = _sign_after_build(
+                model,
+                out_dir,
+                key=args.signing_key,
+                env=env,
+                report=outcome.report,
+                project=project,
+            )
+            signed, ota_image = result.signed, result.ota
+    except BaseException:
+        # Collapse the frame before whatever renders the failure, and put
+        # the log tail back on the terminal: the frame's scrollback is
+        # gone with it, and the tail is what a person diagnoses from.
+        view.close(success=False)
+        _print_log_tail(view, out_dir / buildview.LOG_FILE)
+        raise
+    view.close(success=True)
 
     if output.machine:
         output.result(
