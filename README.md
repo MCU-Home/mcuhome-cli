@@ -96,10 +96,24 @@ next to it — one invocation, so pip resolves the sibling pins against
 the copies being installed:
 
 ```sh
+python3 -m venv .venv && . .venv/bin/activate
 pip install -e ../mcuhome-sdk/packaging/model \
             -e ../mcuhome-sdk/packaging/compiler \
             -e '../mcuhome[remote,local]'
 pip install -e '.[dev]'
+```
+
+Working on this repository alone — no sibling checkouts — works too:
+pip pulls the library family straight from git (it clones internally,
+you keep exactly one checkout):
+
+```sh
+python3 -m venv .venv && . .venv/bin/activate
+pip install \
+  "mcuhome-model @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/model" \
+  "mcuhome-compiler @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/compiler" \
+  "mcuhome-workbench[remote,local] @ git+https://github.com/mcu-home/mcuhome" \
+  -e '.[dev]'
 ```
 
 Then:

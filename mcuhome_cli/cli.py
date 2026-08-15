@@ -566,7 +566,7 @@ def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeErr
                 f"{path} is a private key, and --public-key wants the public half.",
                 hint=(
                     "the whole point of --no-sign is that the private key never "
-                    "reaches the machine that builds (ADR 0015 decision 8). Write the "
+                    "reaches the machine that builds. Write the "
                     "public half out and pass that:\n"
                     f"    mcuhome public-key --signing-key {path} > {signing.PUBLIC_KEY_FILE}"
                 ),
@@ -578,7 +578,7 @@ def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeErr
             BuildError(
                 f"{path} is not an ECDSA P-256 public key in PEM form.",
                 hint=(
-                    "MCUHome signs with ECDSA P-256 (ADR 0015 decision 8). Write the "
+                    "MCUHome signs with ECDSA P-256. Write the "
                     "public half of your key with: mcuhome public-key > <file>"
                 ),
             ),
@@ -663,7 +663,7 @@ def _validate_build_selection(args: argparse.Namespace) -> list[MCUHomeError]:
                 "fully manually — one or the other, not both.",
                 hint=(
                     "a named builder brings its own server, workspace or image with "
-                    "it (ADR 0023); to override one of those, use --build-mode with "
+                    "it; to override one of those, use --build-mode with "
                     "the mode's own flags instead"
                 ),
             )
@@ -678,7 +678,7 @@ def _validate_build_selection(args: argparse.Namespace) -> list[MCUHomeError]:
                     hint=(
                         "without --build-mode the build uses a configured builder "
                         "(--builder NAME, or the default_builder), and a builder "
-                        "carries these values itself (ADR 0023)"
+                        "carries these values itself"
                     ),
                 )
             )
@@ -695,8 +695,7 @@ def _validate_build_selection(args: argparse.Namespace) -> list[MCUHomeError]:
                 "--build-mode remote needs --build-server.",
                 hint=(
                     "name the build server's address (IP or hostname[:port]) — or "
-                    "configure a remote builder once and select it with --builder "
-                    "(ADR 0023)"
+                    "configure a remote builder once and select it with --builder"
                 ),
             )
         )
@@ -1190,9 +1189,8 @@ def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
     return BuildError(
         f"The firmware did not build: {problems}.{account}",
         hint=(
-            f"the build ran {where}, through the build-container ABI (ADR 0018). "
-            "The build log above carries what west and the compiler said; "
-            "--build-mode local-dev compiles on the host instead."
+            f"the build ran {where}. The build log above carries what west and the "
+            "compiler said; --build-mode local-dev compiles on the host instead."
         ),
     )
 
@@ -1792,10 +1790,10 @@ def _cmd_flash(args: argparse.Namespace, output: Output) -> int:
     raise BuildError(
         f"mcuhome device flash is not implemented yet ({args.device} was not touched).",
         hint=(
-            "planned (cli ADR 0003): --flash-mode recovery flashes over our "
-            "MCUboot's USB serial recovery, with no vendor tools. Until then, "
-            "flash the built images with your board's own tooling — the build "
-            "summary names every file and its offset."
+            "planned: --flash-mode recovery will flash over our MCUboot's USB serial "
+            "recovery, with no vendor tools. Until then, flash the built images with "
+            "your board's own tooling — the build summary names every file and its "
+            "offset."
         ),
     )
 
@@ -1806,7 +1804,7 @@ def _cmd_first_time_setup(args: argparse.Namespace, output: Output) -> int:
     raise BuildError(
         f"mcuhome device first-time-setup is not implemented yet ({args.device} was not touched).",
         hint=(
-            "planned (cli ADR 0003): one-time board provisioning — build and "
+            "planned: one-time board provisioning — build and "
             "flash our MCUboot bootloader with the vendor's own tooling, the one "
             "deliberate exception to 'nothing toolchain-shaped on the host' "
             "(cli ADR 0002). Which tools per vendor is analyzed later."
@@ -2316,7 +2314,7 @@ def build_parser() -> argparse.ArgumentParser:
                 default=output_module.HUMAN,
                 metavar="FORMAT",
                 help=(
-                    "output format (cli ADR 0004): human (the default), json — one "
+                    "output format: human (the default), json — one "
                     "machine-readable document on stdout after the run (failure form "
                     '{"ok": false, "errors": [...]}) — or json-stream, NDJSON with the verbs '
                     "start/progress/error/result as the run progresses. Exit codes do not "
@@ -2387,7 +2385,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     config_parser = subparsers.add_parser(
         "config",
-        help="read and write MCUHome configuration (five layers, ADR 0022)",
+        help="read and write MCUHome configuration",
     )
     config_sub = config_parser.add_subparsers(dest="config_command")
     add_bare_help(config_parser)
@@ -2560,7 +2558,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         default=None,
         help=(
-            "build through this configured builder (ADR 0023; `builders:` in any "
+            "build through this configured builder (`builders:` in any "
             "configuration layer). Default: the configured default_builder "
             f"({option_env_var('default_builder')} sets it too), else the local "
             "build container"
@@ -2625,8 +2623,8 @@ def build_parser() -> argparse.ArgumentParser:
             "directory holding the hash-pinned MCUHome SDK package this build is "
             "pinned to (repeatable; searched in order). Needed by the local and "
             "remote modes alike — both create a build context, and the pin is "
-            "part of its identity. An option of the configuration registry "
-            f"(ADR 0022): {option_env_var('sdk_sources')} is a PATH-style list of "
+            "part of its identity. An option of the configuration registry: "
+            f"{option_env_var('sdk_sources')} is a PATH-style list of "
             "them, the configuration files take a `sdk_sources:` list, and "
             "local-dev needs none"
         ),
@@ -2640,7 +2638,7 @@ def build_parser() -> argparse.ArgumentParser:
             "ECDSA P-256 private key to sign the firmware with, as a plain PEM file "
             f"(the {signing.KEY_VAR} environment variable sets it too). Default: the "
             f"project's secrets/firmware/{signing.PRIVATE_KEY_FILE}, generated on "
-            "first use and referenced from mcuboot.yaml (draft ADR 0015 §8)"
+            "first use and referenced from mcuboot.yaml"
         ),
     )
     build_parser_.add_argument(
@@ -2649,7 +2647,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "build the application UNSIGNED and record the signing parameters in "
             "the build manifest, so that the private key never has to be on the "
-            "machine that compiles (ADR 0015 decision 8); needs --public-key, and "
+            "machine that compiles; needs --public-key, and "
             "mcuhome device sign-firmware applies the signature afterwards"
         ),
     )
@@ -2670,7 +2668,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help=(
             "parallel build jobs (default: auto-detected from CPU count and "
-            "available RAM). An option of the configuration registry (ADR 0022): "
+            "available RAM). An option of the configuration registry: "
             f"{option_env_var('jobs')} and the configuration files set it too, "
             "--jobs beats them all"
         ),
@@ -2704,9 +2702,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_options(sign_parser)
     sign_parser.set_defaults(func=_cmd_sign)
 
-    flash_parser = device_sub.add_parser(
-        "flash", help="flash the last built firmware (stub, cli ADR 0003)"
-    )
+    flash_parser = device_sub.add_parser("flash", help="flash the last built firmware (stub)")
     flash_parser.add_argument("device", help="device folder name or path")
     flash_parser.add_argument(
         "--flash-mode",
@@ -2722,7 +2718,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup_parser = device_sub.add_parser(
         "first-time-setup",
-        help="one-time board provisioning: our MCUboot via vendor tooling (stub, cli ADR 0003)",
+        help="one-time board provisioning: our MCUboot via vendor tooling (stub)",
     )
     setup_parser.add_argument("device", help="device folder name or path")
     finish_options(setup_parser)
@@ -2809,9 +2805,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_options(doctor_parser, output=True)
     doctor_parser.set_defaults(func=_cmd_doctor)
 
-    clean_parser = subparsers.add_parser(
-        "clean", help="remove build output of a device (stub, cli ADR 0003)"
-    )
+    clean_parser = subparsers.add_parser("clean", help="remove build output of a device (stub)")
     clean_parser.add_argument("device", nargs="?", help="device folder name or path")
     clean_parser.add_argument("--all", action="store_true", help="clean every device")
     finish_options(clean_parser)

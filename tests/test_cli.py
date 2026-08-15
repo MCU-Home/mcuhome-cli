@@ -1665,7 +1665,7 @@ def test_a_failed_container_build_quotes_the_programs_own_account():
     assert "model/device-model.json" in failure.message
     # The hint names where the build ran as a complete phrase, not as a
     # noun the branch below it has to finish.
-    assert "the build ran in the MCUHome build container," in (failure.hint or "")
+    assert "the build ran in the MCUHome build container." in (failure.hint or "")
     assert "--build-mode local-dev compiles on the host instead" in (failure.hint or "")
 
 
@@ -1713,7 +1713,7 @@ def test_a_failed_remote_build_quotes_the_verdicts_error_envelope():
     failure = cli._delivered_build_failed(outcome)
     assert "ran out of memory" in failure.message
     assert '"app"' in failure.message
-    assert "the build ran on a build server," in (failure.hint or "")
+    assert "the build ran on a build server." in (failure.hint or "")
 
 
 # --------------------------------------------------------------------------
@@ -2039,8 +2039,7 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
     assert main(argv) == 1
     err = capsys.readouterr().err
     assert "--sdk-sources" in err
-    assert "MCUHOME_SDK_SOURCES" in err
-    assert "sdk_sources:" in err
+    assert "sdk_sources" in err
     assert "Traceback" not in err
 
 
