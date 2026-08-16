@@ -52,6 +52,7 @@ __all__ = [
     "JSON",
     "JSON_STREAM",
     "MODES",
+    "Cell",
     "Output",
     "format_table",
     "resolve",
@@ -71,24 +72,71 @@ GREEN = "32"
 YELLOW = "33"
 BLUE = "34"
 BOLD = "1"
+DIM = "2"
 
 
-def format_table(rows: Sequence[Sequence[str]]) -> str:
+@dataclass(frozen=True)
+class Cell:
+    """One table cell that wants a color of its own.
+
+    :func:`format_table` aligns on :attr:`text` and styles afterwards, so
+    the escape codes cannot get counted as width — which is the one way
+    colored tables go crooked.
+    """
+
+    text: str
+    codes: tuple[str, ...] = ()
+
+
+def format_table(
+    rows: Sequence[Sequence[str | Cell]],
+    *,
+    align: str = "",
+    header: bool = False,
+    indent: str = "",
+    output: Output | None = None,
+) -> str:
     """Aligned columns, two spaces apart — the one table style (ADR 0004 §1).
 
-    Plain text in, plain text out: cells must not carry escape codes,
-    because alignment counts characters. A caller that wants color
-    styles the finished line.
+    Cells are plain strings, or a :class:`Cell` when one wants a color;
+    either way alignment counts the text and never an escape code.
+    *align* is one character per column, ``l`` (the default) or ``r`` —
+    numbers read as columns only when their digits line up. *header*
+    styles the first row as the heading it is, *indent* prefixes every
+    line, and *output* decides whether any of the styling is emitted at
+    all (``--color never`` gets the identical table, uncolored).
     """
     if not rows:
         return ""
     columns = max(len(row) for row in rows)
-    widths = [max((len(row[i]) for row in rows if i < len(row)), default=0) for i in range(columns)]
+    widths = [
+        max((len(_text(row[i])) for row in rows if i < len(row)), default=0) for i in range(columns)
+    ]
     lines = []
-    for row in rows:
-        cells = (text.ljust(widths[i]) for i, text in enumerate(row))
-        lines.append("  ".join(cells).rstrip())
+    for index, row in enumerate(rows):
+        cells = []
+        for position, cell in enumerate(row):
+            text = _text(cell)
+            codes = cell.codes if isinstance(cell, Cell) else ()
+            if header and index == 0 and not codes:
+                codes = (BOLD,)
+            right = position < len(align) and align[position] == "r"
+            # The last cell of a row is padded only when the padding is
+            # to its left: trailing spaces are invisible, and inside an
+            # escape sequence they survive the rstrip that removes them.
+            if right:
+                text = text.rjust(widths[position])
+            elif position < len(row) - 1:
+                text = text.ljust(widths[position])
+            if codes and output is not None:
+                text = output.style(text, *codes)
+            cells.append(text)
+        lines.append((indent + "  ".join(cells)).rstrip())
     return "\n".join(lines)
+
+
+def _text(cell: str | Cell) -> str:
+    return cell.text if isinstance(cell, Cell) else cell
 
 
 def resolve(
@@ -149,6 +197,27 @@ class Output:
         if not self.color or not codes:
             return text
         return f"\x1b[{';'.join(codes)}m{text}\x1b[0m"
+
+    def heading(self, text: str) -> str:
+        """A section heading (``Memory``, ``Artifacts``) — bold, nothing else.
+
+        One helper rather than a bold literal per section, so "what a
+        heading looks like" stays a single decision.
+        """
+        return self.style(text, BOLD)
+
+    def path(self, path: object) -> str:
+        """A filesystem path a person may want to find again — blue.
+
+        The same blue ``mcuhome init`` marks directories with: in a wall
+        of build output, the lines that name a file are the ones a person
+        scans for.
+        """
+        return self.style(str(path), BLUE)
+
+    def muted(self, text: str) -> str:
+        """Text that supports the line it sits on rather than carrying it."""
+        return self.style(text, DIM)
 
     def human(self, text: str = "") -> None:
         """A line of human rendering — suppressed in the machine modes."""

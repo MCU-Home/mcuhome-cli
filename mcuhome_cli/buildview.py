@@ -18,10 +18,19 @@ the last :data:`WINDOW_LINES` lines, newest at the bottom, repainted in
 place like ``docker build`` does — so the terminal shows that the build
 is moving without the movement costing scrollback. The full log always
 goes to a file (``build.log`` in the build directory), and the line
-above the frame says so. When the build ends the frame collapses: a
-finished build leaves the step line and the summary, a failed one leaves
-the step line, the tail of the log and the refusal — the things worth
-keeping are exactly the things that remain.
+above the frame says so. The frame belongs to the step that is
+*producing* output: it opens with that step's first log line and closes
+again when the step ends, so a build that is packing a context or
+signing an image shows no empty box pretending output went missing
+(PO 2026-08-16). When the build ends the frame collapses: a finished
+build leaves the step line and the summary, a failed one leaves the step
+line, the tail of the log and the refusal — the things worth keeping are
+exactly the things that remain.
+
+**Notes.** A step that has something to say says it in one line above
+the block (:meth:`_ViewBase.note`) — which SDK the context pinned, what
+the validated device is — and that line stays: it scrolls with the
+terminal rather than living inside the repainted region.
 
 **Two implementations, one seam.** :func:`make_view` answers with the
 live view only when the run is interactive (ADR 0004 §3: a TTY, no
@@ -52,7 +61,7 @@ from shutil import get_terminal_size
 from typing import IO, TextIO
 from unicodedata import east_asian_width
 
-from mcuhome_cli.output import GREEN, RED, YELLOW, Output
+from mcuhome_cli.output import BOLD, DIM, GREEN, RED, YELLOW, Output
 
 __all__ = [
     "PENDING",
@@ -86,7 +95,15 @@ LOG_FILE = "build.log"
 _REPAINT_EVERY = 0.05
 
 _GLYPHS = {PENDING: "·", RUNNING: "▶", DONE: "✓", FAILED: "✗"}
-_COLORS = {RUNNING: (YELLOW,), DONE: (GREEN,), FAILED: (RED,)}
+#: What each state looks like. A step still to come is dimmed rather
+#: than left plain: on a line of five steps, "where am I" should be
+#: readable without reading a single word.
+_COLORS = {
+    PENDING: (DIM,),
+    RUNNING: (YELLOW, BOLD),
+    DONE: (GREEN,),
+    FAILED: (RED, BOLD),
+}
 
 
 @dataclass
@@ -189,7 +206,11 @@ class _ViewBase:
         with self._lock:
             for entry in self.steps:
                 if entry.key == key:
-                    entry.state = RUNNING
+                    # A step may report itself twice — once on entry, once
+                    # with what it found out — so this only ever moves a
+                    # step forward, never back out of a finished state.
+                    if entry.state == PENDING:
+                        entry.state = RUNNING
                     break
                 if entry.state in (PENDING, RUNNING):
                     entry.state = DONE
@@ -202,6 +223,22 @@ class _ViewBase:
             if self._log is not None:
                 self._log.write(text + "\n")
         self._on_line(text)
+
+    def note(self, text: str) -> None:
+        """One line that stays: what a step found out, in a person's words.
+
+        Not a log line — it goes to the terminal and not into
+        ``build.log``, because it says what *this* run decided rather
+        than what the build environment printed.
+        """
+        self._on_note(text)
+
+    def running(self) -> str | None:
+        """The key of the step currently running, if one is."""
+        for entry in self.steps:
+            if entry.state == RUNNING:
+                return entry.key
+        return None
 
     def close(self, *, success: bool) -> None:
         """The run is over; settle the states and stop painting."""
@@ -240,6 +277,9 @@ class _ViewBase:
     def _on_line(self, text: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
+    def _on_note(self, text: str) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
     def _on_close(self, success: bool) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
@@ -274,6 +314,13 @@ class PlainView(_ViewBase):
         else:
             print(text)
 
+    def _on_note(self, text: str) -> None:
+        # A machine mode already carries the facts behind the note as
+        # `progress` data; printing prose beside them would be a second,
+        # worse copy.
+        if not self.output.machine:
+            print(text)
+
     def _on_close(self, success: bool) -> None:
         pass
 
@@ -287,6 +334,12 @@ class LiveView(_ViewBase):
     _painted_lines: int = 0
     _painted_at: float = 0.0
     _closed: bool = False
+    #: The step whose output the frame is currently showing, or None
+    #: while no step is producing any. A build spends its context, its
+    #: artifact and its signing steps here, and an empty box over them
+    #: would claim their output went missing.
+    _frame_step: str | None = None
+    _wrote_log: bool = False
 
     def _terminal(self) -> TextIO:
         return self.stream if self.stream is not None else sys.stdout
@@ -294,13 +347,40 @@ class LiveView(_ViewBase):
     # -- seam reactions -------------------------------------------------
 
     def _on_change(self) -> None:
+        with self._lock:
+            if self._frame_step is not None and self._frame_step != self.running():
+                # The step that owned the frame is over: its output is in
+                # build.log and its result is the step line's glyph.
+                self._frame_step = None
+                self._window.clear()
         self._paint(force=True)
 
     def _on_line(self, text: str) -> None:
         with self._lock:
+            self._wrote_log = True
+            opened = self._frame_step is None
+            if opened:
+                self._frame_step = self.running()
             self._window.append(text)
             del self._window[:-WINDOW_LINES]
-        self._paint()
+        # The throttle may swallow an ordinary line; it must not swallow
+        # the frame appearing, or a step that prints one line and then
+        # thinks would show nothing at all.
+        self._paint(force=opened)
+
+    def _on_note(self, text: str) -> None:
+        # Written *above* the painted block and then left alone: the
+        # block rewinds only over itself, so everything written this way
+        # keeps scrolling up the terminal as the run goes on.
+        with self._lock:
+            if self._closed:
+                return
+            terminal = self._terminal()
+            self._rewind(terminal)
+            terminal.write(text + "\n")
+            terminal.flush()
+            self._painted_lines = 0
+        self._paint(force=True)
 
     def _on_close(self, success: bool) -> None:
         # Collapse: repaint one last time without the frame, leaving the
@@ -312,14 +392,15 @@ class LiveView(_ViewBase):
             terminal = self._terminal()
             self._rewind(terminal)
             terminal.write(self.step_line() + "\n")
-            terminal.write(self._pointer() + "\n")
+            if self._wrote_log:
+                terminal.write(self._pointer() + "\n")
             terminal.flush()
-            self._painted_lines = 2
+            self._painted_lines = 2 if self._wrote_log else 1
 
     # -- painting -------------------------------------------------------
 
     def _pointer(self) -> str:
-        return f"  log: {self.log_path}"
+        return self.output.muted("  log: ") + self.output.path(self.log_path)
 
     def _rewind(self, terminal: TextIO) -> None:
         """Back to the top of the painted block, erasing it downward.
@@ -349,13 +430,16 @@ class LiveView(_ViewBase):
             visible = max(min(WINDOW_LINES, size.lines - 5), 3)
             terminal = self._terminal()
             self._rewind(terminal)
-            lines = [self.step_line(), self._pointer()]
-            lines.append("┌" + "─" * (width - 2) + "┐")
-            window = self._window[-visible:]
-            window = [""] * (visible - len(window)) + window
-            for text in window:
-                lines.append("│ " + _clip(text, inner) + " │")
-            lines.append("└" + "─" * (width - 2) + "┘")
+            lines = [self.step_line()]
+            if self._frame_step is not None:
+                lines.append(self._pointer())
+                lines.append(self.output.muted("┌" + "─" * (width - 2) + "┐"))
+                window = self._window[-visible:]
+                window = [""] * (visible - len(window)) + window
+                bar = self.output.muted("│")
+                for text in window:
+                    lines.append(f"{bar} {_clip(text, inner)} {bar}")
+                lines.append(self.output.muted("└" + "─" * (width - 2) + "┘"))
             terminal.write("\n".join(lines) + "\n")
             terminal.flush()
             self._painted_lines = len(lines)

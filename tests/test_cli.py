@@ -58,9 +58,20 @@ def _fake_local_run(model, **kwargs):
     point of the local path — so this fake never sees one either.
     """
     if kwargs.get("on_step") is not None:
-        # The real composition's two step emissions, in its order.
+        # The real composition's step emissions, in its order: the step
+        # on entry, then the same step again with what it found out.
         kwargs["on_step"]("context")
-        kwargs["on_step"]("compile")
+        kwargs["on_step"](
+            "context",
+            sdk="0.1.0",
+            sdk_sha256="0" * 64,
+            zephyr="4.4",
+            board=model.device.board,
+            files=3,
+            patches=[],
+            id="sha256:" + "1" * 64,
+        )
+        kwargs["on_step"]("compile", image=kwargs.get("image"), jobs=kwargs.get("jobs"))
     work_root = Path(kwargs["work_root"])
     out = work_root / "backend" / "inv" / "out"
     out.mkdir(parents=True, exist_ok=True)
@@ -316,15 +327,18 @@ def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None
     # No combined hex: an unsigned build's is dropped, uniform with the
     # container path, which never has one.
     assert "merged_nrf7002dk_nrf5340_cpuapp.hex" not in out
-    assert "memory: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
-    assert "memory: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
-    assert "memory: RAM 191.7 KiB of 448.0 KiB (42.8%)" in out
-    # And the layout those images were built against.
-    assert "Flash layout (class A, MCUboot swap-using-offset, staging: external-flash)" in out
-    assert "image-0  internal 0x014000..0x0f8000   912 KiB" in out
+    # The footprint, as one table: whole KiB, whole percent, one row per
+    # image (PO 2026-08-16).
+    assert "Image" in out and "FLASH" in out and "RAM" in out
+    assert "56 /   64 KiB   88%" in out
+    assert "840 / 1024 KiB   82%" in out
+    assert "192 / 448 KiB   43%" in out
+    # And the layout those images were built against, as a table.
+    assert "class A · MCUboot swap-using-offset · staging external-flash" in out
+    assert "image-0    internal  0x014000 – 0x0f8000  912 KiB" in out
     # The delivery path: a class-A board with Matter gets a Matter OTA file
     # wrapped around the freshly signed image (ADR 0015 decision 5).
-    assert "Matter OTA image (version 0.1.0, SoftwareVersion 65536)" in out
+    assert "Matter OTA image  version 0.1.0, SoftwareVersion 65536" in out
     ota_file = tmp_path / "bmp180-node-0.1.0.ota"
     assert ota_file.is_file()
     manifest = json.loads((tmp_path / "build-manifest.json").read_text(encoding="utf-8"))
@@ -523,7 +537,7 @@ def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     # No host-side stage-4 tree: the container generates from the model.
     assert not (tmp_path / "app").exists()
     # The .ota wraps the freshly signed image, in the same step.
-    assert "Matter OTA image (version 0.1.0" in out
+    assert "Matter OTA image  version 0.1.0" in out
     assert (tmp_path / "bmp180-node-0.1.0.ota").is_file()
 
 
@@ -549,8 +563,49 @@ def test_the_local_build_prints_the_footprint_from_the_report(
         == 0
     )
     out = capsys.readouterr().out
-    assert "mcuboot: FLASH 56.0 KiB of 64.0 KiB (87.5%)" in out
-    assert "app: FLASH 839.5 KiB of 1024.0 KiB (82.0%)" in out
+    assert "56 /   64 KiB   88%" in out
+    assert "840 / 1024 KiB   82%" in out
+    # The steps say what they established, and the lines stay (PO 2026-08-16).
+    assert "validate  nrf7002dk/nrf5340/cpuapp · Thread router · Matter on" in out
+    assert "context   SDK 0.1.0 · Zephyr 4.4 · no patches · 3 files · id 111111111111" in out
+
+
+def test_the_footprint_table_drops_the_linker_region_and_keeps_empty_ones() -> None:
+    """IDT_LIST is not memory on the device; an empty region is (PO 2026-08-16).
+
+    Zephyr collects interrupt metadata in a bogus IDT_LIST region that
+    the final link discards, so it holds nothing on any board and never
+    could. A region that genuinely exists and is simply empty is a fact
+    about the build and stays in the table — the filter is by name, not
+    by value.
+    """
+    plain = Output(mode="human", color=False, interactive=False)
+    table = cli.format_memory(
+        [
+            cli.Footprint(image="app", region="FLASH", used=738 * 1024, total=908 * 1024),
+            cli.Footprint(image="app", region="IDT_LIST", used=0, total=32 * 1024),
+            cli.Footprint(image="app", region="RAM", used=0, total=448 * 1024),
+        ],
+        output=plain,
+    )
+    assert "IDT_LIST" not in table
+    assert "RAM" in table
+    assert "0 / 448 KiB    0%" in table
+    assert cli.format_memory([], output=plain) == ""
+
+
+def test_the_footprint_table_colors_only_a_tight_fit() -> None:
+    """Color is emphasis on a number that is printed either way (ADR 0004 §1)."""
+    colored = Output(mode="human", color=True, interactive=True)
+    roomy = cli.format_memory(
+        [cli.Footprint(image="app", region="FLASH", used=100, total=1000)], output=colored
+    )
+    tight = cli.format_memory(
+        [cli.Footprint(image="app", region="FLASH", used=950, total=1000)], output=colored
+    )
+    assert "\x1b[31" in tight  # red: over 90 percent full
+    assert "\x1b[31" not in roomy and "\x1b[33" not in roomy
+    assert "10%" in roomy and "95%" in tight
 
 
 def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None:
@@ -1128,7 +1183,7 @@ def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) ->
 
     # The delivery path closes here rather than at build time: the .ota is
     # written where the key is, wrapping the image that was just signed.
-    assert "Matter OTA image (version 0.1.0" in out
+    assert "Matter OTA image  version 0.1.0" in out
     ota_file = out_dir / "bmp180-node-0.1.0.ota"
     assert ota_file.is_file()
     assert document["ota"]["path"] == "bmp180-node-0.1.0.ota"
@@ -2308,8 +2363,22 @@ def test_a_full_build_streams_the_compile_and_sign_stages(tmp_path, capsys, monk
         "device": "bmp180-node",
         "method": "local",
     }
-    stages = [line["stage"] for line in lines if line["verb"] == "progress"]
-    assert stages == ["context", "compile", "artifacts", "sign"]
+    progress = [line for line in lines if line["verb"] == "progress"]
+    # The stage sequence, with the repeats a step's own facts add folded
+    # away: a step may report itself twice, once on entry and once with
+    # what it established (PO 2026-08-16).
+    stages = [line["stage"] for line in progress]
+    folded = [
+        stage for index, stage in enumerate(stages) if index == 0 or stages[index - 1] != stage
+    ]
+    assert folded == ["context", "compile", "artifacts", "sign"]
+    # The facts ride on the progress message rather than in prose: a
+    # machine consumer gets the SDK pin and the context identity as data.
+    facts = next(line for line in progress if line["stage"] == "context" and "sdk" in line)
+    assert facts["sdk"] == "0.1.0"
+    assert facts["zephyr"] == "4.4"
+    assert facts["patches"] == []
+    assert facts["id"].startswith("sha256:")
     assert lines[-1]["verb"] == "result"
     assert lines[-1]["document"]["ok"] is True
     assert lines[-1]["document"]["signed"] is True

@@ -88,6 +88,50 @@ def test_the_block_repaints_in_place_at_constant_height(tmp_path) -> None:
     assert rewinds >= 30  # every line repainted the same block in place
 
 
+def test_a_step_without_output_shows_no_frame_at_all(tmp_path) -> None:
+    """The frame belongs to the step producing output (PO 2026-08-16).
+
+    Packing a context prints nothing, and an empty box over it reads as
+    output that went missing.
+    """
+    view, stream = _live(tmp_path)
+    view.step("compile")
+    painted = stream.getvalue()
+    assert "┌" not in painted
+    assert "│" not in painted
+    assert "build.log" not in painted  # nothing to point at yet
+    assert "▶ compile (container r8)" in painted
+    view.close(success=True)
+
+
+def test_the_frame_closes_with_the_step_that_filled_it(tmp_path) -> None:
+    view, stream = _live(tmp_path)
+    view.step("compile")
+    view.line("compiler said this")
+    assert "│" in stream.getvalue().rsplit("\x1b[0J", 1)[-1]
+    view.step("sign")
+    after = stream.getvalue().rsplit("\x1b[0J", 1)[-1]
+    assert "│" not in after
+    assert "compiler said this" not in after
+    assert "▶ sign (local)" in after
+    view.close(success=True)
+
+
+def test_a_note_stays_above_the_repainted_block(tmp_path) -> None:
+    view, stream = _live(tmp_path)
+    view.note("  context   SDK 0.1.0")
+    view.step("compile")
+    for index in range(3):
+        view.line(f"line {index}")
+    view.close(success=True)
+    written = stream.getvalue()
+    # Written once and never rewound over: the block below it repaints,
+    # the note scrolls up with the rest of the terminal.
+    assert written.count("context   SDK 0.1.0") == 1
+    assert "context   SDK 0.1.0" not in written.rsplit("\x1b[0J", 1)[-1]
+    assert "SDK" not in (tmp_path / "build.log").read_text("utf-8")
+
+
 def test_the_window_shows_the_newest_lines_and_the_file_keeps_all(tmp_path) -> None:
     view, stream = _live(tmp_path)
     view.step("compile")
@@ -161,6 +205,20 @@ def test_the_plain_view_passes_lines_through(tmp_path, capsys) -> None:
     view.close(success=True)
     assert "west said this" in capsys.readouterr().out
     assert "west said this" in (tmp_path / "build.log").read_text("utf-8")
+
+
+def test_the_plain_view_prints_notes_but_a_machine_mode_does_not(tmp_path, capsys) -> None:
+    """A machine mode carries the facts as ``progress`` data already."""
+    view = PlainView(_steps(), output=PLAIN, log_path=tmp_path / "build.log")
+    view.note("  context   SDK 0.1.0")
+    view.close(success=True)
+    assert "context   SDK 0.1.0" in capsys.readouterr().out
+
+    view = PlainView(_steps(), output=MACHINE, log_path=tmp_path / "build.log")
+    view.note("  context   SDK 0.1.0")
+    view.close(success=True)
+    captured = capsys.readouterr()
+    assert captured.out == "" and captured.err == ""
 
 
 def test_under_a_machine_mode_lines_go_to_stderr(tmp_path, capsys) -> None:

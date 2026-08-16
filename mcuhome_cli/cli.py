@@ -115,8 +115,10 @@ import json
 import os
 import shutil
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from mcuhome.compiler import container, workspace
 from mcuhome.compiler.generate import write_tree
@@ -272,7 +274,7 @@ def _cluster_unit(cluster_id: int) -> tuple[str, float]:
     return "", 1.0  # pragma: no cover - every generated cluster is known
 
 
-def format_commissioning(credentials: PairingModel, *, masked: bool = False) -> str:
+def format_commissioning(credentials: PairingModel, *, output: Output, masked: bool = False) -> str:
     """The two strings a human needs to add the device to a controller.
 
     Printed, never written: the builder keeps no record of a device's
@@ -285,40 +287,37 @@ def format_commissioning(credentials: PairingModel, *, masked: bool = False) -> 
     it in the clear.
     """
     if masked:
-        hidden = _("hidden — mcuhome device matter-pairing <device> shows it")
-        lines = [
-            "Commissioning",
-            f"  manual code    {hidden}",
-            f"  QR code        {hidden}",
-            f"  discriminator  {credentials.discriminator} (0x{credentials.discriminator:03X})",
-        ]
-        if credentials.test_credentials:
-            lines.append(
-                "  NOTE: these are the credentials published with the Matter SDK. Anyone "
-                "who\n        knows them can commission this device — bench use only."
-            )
-        return "\n".join(lines)
-    tuple_ = pairing.Pairing(
-        discriminator=credentials.discriminator,
-        passcode=credentials.passcode,
-        salt=credentials.salt,
-        iterations=credentials.iterations,
-    )
+        hidden = output.muted(_("hidden — mcuhome device matter-pairing <device> shows it"))
+        manual, qr = hidden, hidden
+    else:
+        tuple_ = pairing.Pairing(
+            discriminator=credentials.discriminator,
+            passcode=credentials.passcode,
+            salt=credentials.salt,
+            iterations=credentials.iterations,
+        )
+        manual = output.style(tuple_.manual_code, output_module.BOLD)
+        qr = output.style(tuple_.qr_payload, output_module.BOLD)
+    label = output.muted
     lines = [
-        "Commissioning",
-        f"  manual code    {tuple_.manual_code}",
-        f"  QR code        {tuple_.qr_payload}",
-        f"  discriminator  {credentials.discriminator} (0x{credentials.discriminator:03X})",
+        output.heading("Commissioning"),
+        f"  {label('manual code   ')} {manual}",
+        f"  {label('QR code       ')} {qr}",
+        f"  {label('discriminator ')} {credentials.discriminator} "
+        f"(0x{credentials.discriminator:03X})",
     ]
     if credentials.test_credentials:
         lines.append(
-            "  NOTE: these are the credentials published with the Matter SDK. Anyone "
-            "who\n        knows them can commission this device — bench use only."
+            output.style(
+                "  NOTE: these are the credentials published with the Matter SDK. Anyone "
+                "who\n        knows them can commission this device — bench use only.",
+                output_module.YELLOW,
+            )
         )
     return "\n".join(lines)
 
 
-def format_summary(model: DeviceModel, *, masked: bool = True) -> str:
+def format_summary(model: DeviceModel, *, output: Output, masked: bool = True) -> str:
     """The human-readable picture of a resolved device.
 
     *masked* hides the pairing codes (PO 2026-08-15) — ``validate
@@ -326,30 +325,42 @@ def format_summary(model: DeviceModel, *, masked: bool = True) -> str:
     """
     lines: list[str] = []
     device = model.device
-    lines.append(f"Device     {device.name} ({device.friendly_name})")
-    lines.append(f"Board      {device.board}")
-    lines.append(f"Power      {device.power_source}")
+    label = output.muted
+
+    def row(name: str, value: str) -> str:
+        return f"{label(name.ljust(9))}  {value}"
+
+    lines.append(
+        row("Device", f"{output.style(device.name, output_module.BOLD)} ({device.friendly_name})")
+    )
+    lines.append(row("Board", device.board))
+    lines.append(row("Power", device.power_source))
 
     network = model.network
     if network.transport == "thread" and network.thread is not None:
         role = {"ftd": "router", "mtd": "end device"}.get(
             network.thread.device_role, network.thread.device_role
         )
-        lines.append(f"Transport  Thread, {role}")
+        lines.append(row("Transport", f"Thread, {role}"))
     elif network.transport:
-        lines.append(f"Transport  {network.transport}")
+        lines.append(row("Transport", network.transport))
     else:
-        lines.append("Transport  none (standalone device)")
-    lines.append(f"Matter     {'enabled' if network.matter_enabled else 'disabled'}")
-    lines.append(f"Zephyr     {model.toolchain.zephyr_line}")
-    blobs = ", ".join(f"{name}: {value}" for name, value in model.toolchain.blobs.items())
+        lines.append(row("Transport", "none (standalone device)"))
+    matter = network.matter_enabled
     lines.append(
-        f"Blobs      {blobs or 'none integrated yet'} (blob_usage: {model.toolchain.blob_usage})"
+        row(
+            "Matter",
+            output.style("enabled", output_module.GREEN) if matter else label("disabled"),
+        )
     )
+    lines.append(row("Zephyr", model.toolchain.zephyr_line))
+    blobs = ", ".join(f"{name}: {value}" for name, value in model.toolchain.blobs.items())
+    usage = label(f"(blob_usage: {model.toolchain.blob_usage})")
+    lines.append(row("Blobs", f"{blobs or 'none integrated yet'} {usage}"))
 
     if model.hardware.buses or model.hardware.peripherals:
         lines.append("")
-        lines.append("Hardware")
+        lines.append(output.heading("Hardware"))
         for bus in model.hardware.buses:
             detail = f" via {bus.controller}" if bus.controller else ""
             frequency = f", {bus.frequency_hz // 1000} kHz" if bus.frequency_hz else ""
@@ -361,23 +372,26 @@ def format_summary(model: DeviceModel, *, masked: bool = True) -> str:
 
     if model.endpoints:
         lines.append("")
-        lines.append("Endpoints")
+        lines.append(output.heading("Endpoints"))
         for endpoint in model.endpoints:
             types = ", ".join(
-                f"{item.name} ({item.id:#06x} rev {item.revision})"
+                f"{item.name} {label(f'({item.id:#06x} rev {item.revision})')}"
                 for item in endpoint.device_types
             )
             alias = f" [{endpoint.alias}]" if endpoint.alias else ""
-            lines.append(f"  endpoint {endpoint.id}{alias}: {types}")
+            lines.append(f"  {label('endpoint')} {endpoint.id}{alias}: {types}")
             for cluster in endpoint.clusters:
                 lines.append(
-                    f"    {cluster.name} ({cluster.id:#06x} rev "
-                    f"{cluster.cluster_revision}, {len(cluster.attrs)} attributes)"
+                    f"    {cluster.name} "
+                    + label(
+                        f"({cluster.id:#06x} rev {cluster.cluster_revision}, "
+                        f"{len(cluster.attrs)} attributes)"
+                    )
                 )
 
     if model.channels:
         lines.append("")
-        lines.append("Channels")
+        lines.append(output.heading("Channels"))
         for channel in model.channels:
             unit, raw_per_unit = _cluster_unit(channel.cluster_id)
             if channel.report_delta:
@@ -386,23 +400,31 @@ def format_summary(model: DeviceModel, *, masked: bool = True) -> str:
             else:
                 delta = "report every sample"
             lines.append(
-                f"  {channel.source.channel} -> endpoint {channel.endpoint_id} "
-                f"{channel.cluster_id:#06x}/{channel.attr_id:#06x}, every "
+                f"  {channel.source.channel} {label('->')} endpoint {channel.endpoint_id} "
+                f"{label(f'{channel.cluster_id:#06x}/{channel.attr_id:#06x}')}, every "
                 f"{_format_duration(channel.sample_period_ms)}, {delta}"
             )
 
     if model.network.pairing is not None:
         lines.append("")
-        lines.append(format_commissioning(model.network.pairing, masked=masked))
+        lines.append(format_commissioning(model.network.pairing, output=output, masked=masked))
 
     if model.build.snippets or model.build.kconfig:
         lines.append("")
-        lines.append("Build")
+        lines.append(output.heading("Build"))
         if model.build.snippets:
-            lines.append(f"  snippets: {', '.join(model.build.snippets)}")
-        lines.append(f"  {len(model.build.kconfig)} Kconfig settings")
+            lines.append(f"  {label('snippets:')} {', '.join(model.build.snippets)}")
+        lines.append(f"  {len(model.build.kconfig)} {label('Kconfig settings')}")
 
     return "\n".join(lines)
+
+
+def _built_line(name: str, *, output: Output) -> str:
+    """The one line that says the build worked, and for what."""
+    return (
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} Built "
+        f"{output.style(name, output_module.BOLD)}."
+    )
 
 
 def format_build_summary(
@@ -410,6 +432,7 @@ def format_build_summary(
     *,
     images: list[workspace.ImageArtifacts],
     memory: dict[str, list[workspace.MemoryRegion]],
+    output: Output,
     merged: Path | None = None,
 ) -> str:
     """What came out of stage 5: which images, where, and what they cost.
@@ -418,33 +441,143 @@ def format_build_summary(
     signed for it. Both are reported, because "the firmware" is now both
     of them and a user installing only the second one has a brick.
     """
-    lines = [f"Built {name}."]
+    lines = [_built_line(name, output=output)]
     for image in images:
         lines.append("")
-        lines.append(image.describe())
+        lines.append(output.heading(image.describe()))
         for path in image.files:
-            lines.append(f"  {path}")
-        for region in memory.get(image.name, []):
-            lines.append(f"  memory: {region.describe()}")
+            lines.append(f"  {output.path(path)}")
+    footprint = [
+        Footprint(image=image.name, region=region.name, used=region.used, total=region.total)
+        for image in images
+        for region in memory.get(image.name, [])
+    ]
+    table = format_memory(footprint, output=output)
+    if table:
+        lines.append("")
+        lines.append(table)
     if merged is not None:
         lines.append("")
-        lines.append("Combined (every image at its own offset, for a full-chip flash)")
-        lines.append(f"  {merged}")
+        lines.append(output.heading("Combined"))
+        lines.append(output.muted("  every image at its own offset, for a full-chip flash"))
+        lines.append(f"  {output.path(merged)}")
     return "\n".join(lines)
 
 
-def format_flash_layout(board: str) -> str:
+@dataclass(frozen=True)
+class Footprint:
+    """One image's use of one memory region, in bytes."""
+
+    image: str
+    region: str
+    used: int
+    total: int
+
+    @property
+    def percent(self) -> float:
+        return 100.0 * self.used / self.total if self.total else 0.0
+
+
+#: Regions the linker reports that are not memory on the device at all.
+#: Zephyr collects the interrupt-table metadata in a bogus ``IDT_LIST``
+#: region at a made-up address and the final link discards it
+#: (``include/zephyr/linker/intlist.ld``), so it holds nothing on any
+#: board and never could. Printing "0 of 32 KiB" invites a reader to
+#: compare it with FLASH, where that number would mean something.
+#: Filtering is by name and never by value: a genuinely empty region is
+#: a fact about the build and stays in the table.
+LINKER_ONLY_REGIONS = frozenset({"IDT_LIST"})
+
+#: Where a fill level stops being unremarkable. Below the first, no
+#: color: an image that fits is not news.
+_TIGHT_PERCENT = 75.0
+_CRITICAL_PERCENT = 90.0
+
+
+def _fill_codes(percent: float) -> tuple[str, ...]:
+    if percent >= _CRITICAL_PERCENT:
+        return (output_module.RED, output_module.BOLD)
+    if percent >= _TIGHT_PERCENT:
+        return (output_module.YELLOW,)
+    return ()
+
+
+def format_memory(entries: Sequence[Footprint], *, output: Output) -> str:
+    """The footprint table: one row per image, one column per region.
+
+    Rounded to whole KiB and whole percent on purpose — a tenth of a KiB
+    is noise in a number a person reads to answer "will the next feature
+    still fit". The exact bytes stay in ``-o json`` and in the build
+    report, which is where anything that computes with them looks.
+    """
+    entries = [entry for entry in entries if entry.region not in LINKER_ONLY_REGIONS]
+    if not entries:
+        return ""
+    images = list(dict.fromkeys(entry.image for entry in entries))
+    regions = list(dict.fromkeys(entry.region for entry in entries))
+    by_key = {(entry.image, entry.region): entry for entry in entries}
+
+    def kib(value: int) -> str:
+        return f"{round(value / 1024)}"
+
+    # Column widths inside a cell, per region: the used/total numbers of
+    # one region line up with each other, which is what makes two rows
+    # comparable at a glance.
+    used_width = {
+        region: max(len(kib(entry.used)) for entry in entries if entry.region == region)
+        for region in regions
+    }
+    total_width = {
+        region: max(len(kib(entry.total)) for entry in entries if entry.region == region)
+        for region in regions
+    }
+    rows: list[list[str | output_module.Cell]] = [["Image", *regions]]
+    for image in images:
+        row: list[str | output_module.Cell] = [image]
+        for region in regions:
+            entry = by_key.get((image, region))
+            if entry is None:
+                row.append("")
+                continue
+            percent = entry.percent
+            text = (
+                f"{kib(entry.used):>{used_width[region]}} / "
+                f"{kib(entry.total):>{total_width[region]}} KiB  {round(percent):>3}%"
+            )
+            row.append(output_module.Cell(text, _fill_codes(percent)))
+        rows.append(row)
+    return (
+        output.heading("Memory")
+        + "\n"
+        + output_module.format_table(rows, header=True, indent="  ", output=output)
+    )
+
+
+def format_flash_layout(board: str, *, output: Output) -> str:
     """The partition table the images were built against (ADR 0015)."""
     definition = registry.BOARDS.get(board)
     if definition is None or definition.update_scheme is None:
         return ""
     scheme = definition.update_scheme
-    lines = [
-        f"Flash layout (class {scheme.board_class}, MCUboot {scheme.mcuboot_mode}, "
-        f"staging: {scheme.staging})"
-    ]
-    lines += [f"  {entry.describe()}" for entry in scheme.partitions]
-    return "\n".join(lines)
+    rows: list[list[str | output_module.Cell]] = [["Partition", "Device", "Range", "Size"]]
+    for entry in scheme.partitions:
+        rows.append(
+            [
+                entry.fixed_label,
+                entry.device or "internal",
+                f"{entry.offset:#08x} – {entry.end:#08x}",
+                f"{entry.size // 1024} KiB",
+            ]
+        )
+    heading = (
+        output.heading("Flash layout")
+        + "  "
+        + output.muted(
+            f"class {scheme.board_class} · MCUboot {scheme.mcuboot_mode} · staging {scheme.staging}"
+        )
+    )
+    table = output_module.format_table(rows, align="lllr", header=True, indent="  ", output=output)
+    return f"{heading}\n{table}"
 
 
 # --------------------------------------------------------------------------
@@ -468,12 +601,15 @@ def _cmd_validate(args: argparse.Namespace, output: Output) -> int:
     if not result.ok:
         result.raise_errors()
     assert result.model is not None  # noqa: S101 - ok means there is one
-    print(format_summary(result.model, masked=not args.show_sensitive))
+    print(format_summary(result.model, output=output, masked=not args.show_sensitive))
     if args.verbose:
         print()
         print(result.model.to_json(), end="")
     print()
-    print(f"{entry} is valid.")
+    print(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} "
+        f"{output.path(entry)} is valid."
+    )
     return phases.EXIT_OK
 
 
@@ -809,7 +945,7 @@ def _cmd_build(args: argparse.Namespace, output: Output) -> int:
                     }
                 )
                 return phases.EXIT_OK
-            _print_commissioning(model)
+            _print_commissioning(model, output=output)
             return phases.EXIT_OK
         return _build_local_dev(
             args,
@@ -886,19 +1022,27 @@ def _build_local_dev(
     if not args.no_sign:
         steps.append(buildview.BuildStep("sign", "sign (local)"))
     view = buildview.make_view(steps, output=output, log_path=out_dir / buildview.LOG_FILE)
+    view.note(_validate_note(model, output=output))
 
-    def on_step(stage: str) -> None:
-        output.progress(stage, device=model.device.name)
+    def on_step(stage: str, **facts: Any) -> None:
+        output.progress(stage, device=model.device.name, **facts)
         view.step(stage)
+        note = _step_note(stage, facts, output=output)
+        if note is not None:
+            view.note(note)
 
     def announce(plan: workspace.BuildPlan) -> None:
         """Say what is about to run — after every pre-flight refusal, before it."""
         if not output.machine:
             print()
-            print(f"Building {model.device.name} for {model.device.board} in {plan.topdir}")
-            print(f"  jobs {jobs} ({jobs_source})")
+            print(
+                f"{output.heading('Building')} "
+                f"{output.style(model.device.name, output_module.BOLD)} for "
+                f"{model.device.board} {output.muted('in')} {output.path(plan.topdir)}"
+            )
+            print(f"  {output.muted('jobs')} {jobs} {output.muted(f'({jobs_source})')}")
             print(_key_note(key, public_key, output))
-            print(f"  {' '.join(plan.command)}")
+            print(f"  {output.muted(' '.join(plan.command))}")
             print()
         # The build log is teed to the same terminal; flush so the header
         # above it is not still sitting in this process's buffer.
@@ -982,22 +1126,93 @@ def _build_local_dev(
             memory=workspace.parse_image_memory_report(
                 log, images=[image.name for image in images]
             ),
+            output=output,
             merged=merged,
         )
     )
-    print(f"  {manifest_path}")
+    print(f"  {output.path(manifest_path)}")
     if ota_image is not None:
         print()
-        print(_ota_note(ota_image))
-    layout = format_flash_layout(model.device.board)
+        print(_ota_note(ota_image, output=output))
+    layout = format_flash_layout(model.device.board, output=output)
     if layout:
         print()
         print(layout)
     if args.no_sign:
         print()
         print(_detached_next_step(out_dir))
-    _print_commissioning(model)
+    _print_commissioning(model, output=output)
     return 0
+
+
+# --------------------------------------------------------------------------
+# What a build step says about itself (cli ADR 0004, PO 2026-08-16)
+# --------------------------------------------------------------------------
+#
+# A step line says how far a build is; these lines say what it found on
+# the way. They stay on the terminal after the run — "which SDK was this
+# firmware built from", "was Matter on", "did anything patch the build
+# environment" are questions a person asks about a build that finished
+# hours ago, and answering them in passing costs one line each.
+
+
+def _note(label: str, parts: Sequence[str], *, output: Output) -> str:
+    """One step's line: which step, then what it established."""
+    return "  " + output.muted(label.ljust(10)) + output.muted(" · ").join(parts)
+
+
+def _count(number: int, thing: str) -> str:
+    return f"{number} {thing}" if number == 1 else f"{number} {thing}s"
+
+
+def _transport_note(model: DeviceModel) -> str:
+    network = model.network
+    if network.transport == "thread" and network.thread is not None:
+        role = {"ftd": "router", "mtd": "end device"}.get(
+            network.thread.device_role, network.thread.device_role
+        )
+        return f"Thread {role}"
+    return network.transport or "no transport"
+
+
+def _validate_note(model: DeviceModel, *, output: Output) -> str:
+    """What validating the configuration established, in one line."""
+    return _note(
+        "validate",
+        [
+            model.device.board,
+            _transport_note(model),
+            "Matter on" if model.network.matter_enabled else "Matter off",
+            _count(len(model.endpoints), "endpoint"),
+            _count(len(model.channels), "channel"),
+        ],
+        output=output,
+    )
+
+
+def _step_note(stage: str, facts: dict[str, Any], *, output: Output) -> str | None:
+    """The line a step's facts make, or None when they make none.
+
+    Facts are append-only display material (``BuildRequest.on_step``):
+    what is rendered here is what this version recognizes, and a fact it
+    does not know is carried by the machine modes and ignored here
+    rather than guessed at.
+    """
+    if stage != "context" or not facts:
+        return None
+    # Every value is read defensively: a line that describes the build
+    # must never be the thing that ends it.
+    parts = [f"SDK {facts.get('sdk', '?')}", f"Zephyr {facts.get('zephyr', '?')}"]
+    patches = facts.get("patches") or []
+    parts.append(f"patches: {', '.join(patches)}" if patches else "no patches")
+    if facts.get("files"):
+        parts.append(_count(int(facts["files"]), "file"))
+    identity = str(facts.get("id") or "")
+    if identity:
+        # The full ID is in the manifest and in `-o json`; twelve hex
+        # digits are what a person compares two builds with.
+        parts.append(f"id {identity.partition(':')[2][:12]}")
+    return _note("context", parts, output=output)
 
 
 def _bootloader_public_key(key: signing.SigningKey, out_dir: Path) -> Path:
@@ -1062,17 +1277,23 @@ def _build_delivered(
     if not output.machine:
         print()
         where = "on a build server" if remote else "in the build container"
-        print(f"Building {model.device.name} for {model.device.board} {where}")
+        print(
+            f"{output.heading('Building')} {output.style(model.device.name, output_module.BOLD)} "
+            f"for {model.device.board} {output.muted(where)}"
+        )
         if selection.builder is not None:
-            print(f"  builder {selection.builder.name} ({selection.builder.type})")
+            print(
+                f"  {output.muted('builder')} {selection.builder.name} "
+                f"{output.muted(f'({selection.builder.type})')}"
+            )
         if remote:
             # Only when there is one: a run that is about to be refused for
             # the lack of an address should not print "server None" first.
             if server:
-                print(f"  server {server}")
+                print(f"  {output.muted('server')} {server}")
         else:
-            print(f"  image {reference}")
-        print(f"  jobs {jobs} ({jobs_source})")
+            print(f"  {output.muted('image')} {reference}")
+        print(f"  {output.muted('jobs')} {jobs} {output.muted(f'({jobs_source})')}")
         print(_key_note(key, public_key, output))
         print()
     sys.stdout.flush()
@@ -1094,12 +1315,18 @@ def _build_delivered(
     if not args.no_sign:
         steps.append(buildview.BuildStep("sign", "sign (local)"))
     view = buildview.make_view(steps, output=output, log_path=out_dir / buildview.LOG_FILE)
+    view.note(_validate_note(model, output=output))
 
-    def on_step(stage: str) -> None:
-        # One seam, two consumers: the machine modes get the honest
-        # `progress` verb, a live human run gets the repainted step line.
-        output.progress(stage, device=model.device.name)
+    def on_step(stage: str, **facts: Any) -> None:
+        # One seam, three consumers: the machine modes get the honest
+        # `progress` verb with whatever facts came with it, a live human
+        # run gets the repainted step line, and a step that established
+        # something worth stating leaves a line saying what.
+        output.progress(stage, device=model.device.name, **facts)
         view.step(stage)
+        note = _step_note(stage, facts, output=output)
+        if note is not None:
+            view.note(note)
 
     try:
         # A hidden scratch area under the build directory: the context and
@@ -1173,18 +1400,18 @@ def _build_delivered(
         return phases.EXIT_OK
 
     print()
-    print(_format_local_summary(model.device.name, copied, signed, report))
+    print(_format_local_summary(model.device.name, copied, signed, report, output=output))
     if ota_image is not None:
         print()
-        print(_ota_note(ota_image))
-    layout = format_flash_layout(model.device.board)
+        print(_ota_note(ota_image, output=output))
+    layout = format_flash_layout(model.device.board, output=output)
     if layout:
         print()
         print(layout)
     if args.no_sign:
         print()
         print(_detached_next_step(out_dir))
-    _print_commissioning(model)
+    _print_commissioning(model, output=output)
     return 0
 
 
@@ -1272,17 +1499,29 @@ def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
     )
 
 
-def _describe_report_region(region: dict) -> str:
-    """One §7.2.1 ``memory`` entry, rendered like the linker's own table.
+def _report_footprint(report: dict) -> list[Footprint]:
+    """The §7.2.1 ``memory`` entries as the one footprint shape.
 
-    The same shape ``format_build_summary`` prints for a ``local-dev`` build, from
-    the report the container measured rather than a host build log this
-    path never produced.
+    What ``format_build_summary`` reads out of a host build log, read
+    here out of the report the build environment measured — the two
+    paths render one table because they answer one question.
     """
-    used = float(region.get("used", 0)) / 1024
-    total = float(region.get("total", 0)) / 1024
-    percent = float(region.get("percent", 0.0))
-    return f"{region.get('region')} {used:.1f} KiB of {total:.1f} KiB ({percent:.1f}%)"
+    memory = report.get("memory")
+    if not isinstance(memory, list):
+        return []
+    entries = []
+    for region in memory:
+        if not isinstance(region, dict):
+            continue
+        entries.append(
+            Footprint(
+                image=str(region.get("image", "")),
+                region=str(region.get("region", "")),
+                used=int(region.get("used", 0)),
+                total=int(region.get("total", 0)),
+            )
+        )
+    return entries
 
 
 def _format_local_summary(
@@ -1290,22 +1529,21 @@ def _format_local_summary(
     copied: list[tuple[str, str, Path]],
     signed: list[Path],
     report: dict,
+    *,
+    output: Output,
 ) -> str:
     """What the container delivered, what the host signed, and the footprint."""
-    lines = [f"Built {name}."]
+    lines = [_built_line(name, output=output)]
     lines.append("")
-    lines.append("Artifacts")
+    lines.append(output.heading("Artifacts"))
     for role, _name, destination in copied:
-        lines.append(f"  {destination}  ({role})")
+        lines.append(f"  {output.path(destination)}  {output.muted(f'({role})')}")
     for path in signed:
-        lines.append(f"  {path}  (signed)")
-    memory = report.get("memory")
-    if isinstance(memory, list) and memory:
+        lines.append(f"  {output.path(path)}  {output.style('(signed)', output_module.GREEN)}")
+    table = format_memory(_report_footprint(report), output=output)
+    if table:
         lines.append("")
-        lines.append("Memory")
-        for region in memory:
-            if isinstance(region, dict):
-                lines.append(f"  {region.get('image')}: {_describe_report_region(region)}")
+        lines.append(table)
     return "\n".join(lines)
 
 
@@ -1329,14 +1567,17 @@ def _write_ota(model: DeviceModel, *, out_dir: Path, signed: Path) -> ota.OtaIma
     )
 
 
-def _ota_note(image: ota.OtaImage) -> str:
+def _ota_note(image: ota.OtaImage, *, output: Output) -> str:
     return (
-        f"Matter OTA image (version {image.version}, "
-        f"SoftwareVersion {image.software_version}):\n"
-        f"    {image.path}\n"
-        "Put it where your controller's OTA provider looks for images; the device "
-        "downloads it\nover Thread once a controller announces the provider or the "
-        "next periodic query runs."
+        output.heading("Matter OTA image")
+        + "  "
+        + output.muted(f"version {image.version}, SoftwareVersion {image.software_version}")
+        + f"\n  {output.path(image.path)}\n"
+        + output.muted(
+            "  Put it where your controller's OTA provider looks for images; the device\n"
+            "  downloads it over Thread once a controller announces the provider or the\n"
+            "  next periodic query runs."
+        )
     )
 
 
@@ -1437,7 +1678,7 @@ def _key_note(key: signing.SigningKey | None, public_key: Path | None, output: O
     if key is not None:
         return _signing_key_note(key, output)
     assert public_key is not None  # noqa: S101 - _resolve_build_key returns one or the other
-    return _detached_key_note(public_key)
+    return _detached_key_note(public_key, output)
 
 
 def _signing_key_note(key: signing.SigningKey, output: Output) -> str:
@@ -1449,9 +1690,9 @@ def _signing_key_note(key: signing.SigningKey, output: Output) -> str:
     bootstrapped device will refuse.
     """
     if not key.created:
-        return f"  signing key {key.path}"
+        return f"  {output.muted('signing key')} {output.path(key.path)}"
     return (
-        f"  signing key {key.path}\n"
+        f"  {output.muted('signing key')} {output.path(key.path)}\n"
         f"               {output.style('NEW', output_module.YELLOW, output_module.BOLD)}"
         " — MCUHome had none and generated one just now. Keep it: every\n"
         "               device bootstrapped with it only accepts firmware signed "
@@ -1460,16 +1701,15 @@ def _signing_key_note(key: signing.SigningKey, output: Output) -> str:
     )
 
 
-def _detached_key_note(path: Path) -> str:
+def _detached_key_note(path: Path, output: Output) -> str:
     """Where the *public* key came from, and what it does not let happen."""
-    return (
-        f"  public key  {path}\n"
+    return f"  {output.muted('public key ')} {output.path(path)}\n" + output.muted(
         "              --no-sign: the bootloader gets this, the application is\n"
         "              left unsigned, and no private key is anywhere near this build."
     )
 
 
-def _print_commissioning(model: DeviceModel) -> None:
+def _print_commissioning(model: DeviceModel, *, output: Output) -> None:
     """A masked pairing reminder, last, where a freshly built device needs it.
 
     Masked on purpose (PO 2026-08-15): a build log is output that merely
@@ -1479,7 +1719,7 @@ def _print_commissioning(model: DeviceModel) -> None:
     if model.network.pairing is None:
         return
     print()
-    print(format_commissioning(model.network.pairing, masked=True))
+    print(format_commissioning(model.network.pairing, output=output, masked=True))
 
 
 def _validate_matter_pairing(args: argparse.Namespace, output: Output) -> list[MCUHomeError]:
@@ -1517,20 +1757,27 @@ def _cmd_matter_pairing(args: argparse.Namespace, output: Output) -> int:
                     f"{args.device}"
                 ),
             )
-        print(format_commissioning(model.network.pairing))
+        print(format_commissioning(model.network.pairing, output=output))
         return phases.EXIT_OK
     result = provision.init_pairing(entry, secrets_file=project.secrets_file, force=args.force)
     verb = "Replaced the commissioning credentials for" if result.replaced else "Wrote"
-    print(f"{verb} {result.entry}.")
     print(
-        f"The values live in {result.secrets_file}; the configuration carries !secret references."
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} {verb} "
+        f"{output.path(result.entry)}."
+    )
+    print(
+        f"The values live in {output.path(result.secrets_file)}; the configuration carries "
+        "!secret references."
     )
     print()
-    print(format_commissioning(_pairing_model(result.pairing)))
+    print(format_commissioning(_pairing_model(result.pairing), output=output))
     print()
     print(
-        "Keep the secrets file safe: it is the only copy. Anyone who has it — or the "
-        "firmware\nbuilt from it — can commission this device."
+        output.style(
+            "Keep the secrets file safe: it is the only copy. Anyone who has it — or the "
+            "firmware\nbuilt from it — can commission this device.",
+            output_module.YELLOW,
+        )
     )
     return 0
 
@@ -1561,7 +1808,10 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
         print(f"{target} is already an MCUHome project; nothing to do.")
         return phases.EXIT_OK
     result = api.init_project(target, force=args.force)
-    print(f"Created an MCUHome project in {result.project.root}:")
+    print(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} Created an MCUHome "
+        f"project in {output.path(result.project.root)}:"
+    )
     # Files first, then directories with a trailing slash and ls's blue
     # (PO 2026-08-15) — what was created is legible at a glance.
     for path in sorted(result.created, key=lambda p: (p.is_dir(), str(p))):
@@ -1570,7 +1820,7 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
             shown = output.style(f"{shown}/", output_module.BLUE)
         print(f"  {shown}")
     print()
-    print(_("Next:"))
+    print(output.heading(_("Next:")))
     print(_("  mcuhome device new --help    how to describe your first device"))
     print(_("  mcuhome --help               every command, and the workflow"))
     print()
@@ -1579,7 +1829,6 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
 
 
 def _cmd_new(args: argparse.Namespace, output: Output) -> int:
-    del output
     created = scaffold.new_device(
         args.device,
         board=args.board,
@@ -1588,17 +1837,22 @@ def _cmd_new(args: argparse.Namespace, output: Output) -> int:
         project_dir=args.project_dir,
         friendly_name=args.name,
     )
-    print(f"Wrote {created.entry}.")
+    print(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} Wrote "
+        f"{output.path(created.entry)}."
+    )
     print()
-    print(_("Next:"))
+    print(output.heading(_("Next:")))
     print(f"  mcuhome device matter-pairing --new {created.name}    draw its commissioning codes")
     print(f"  mcuhome device validate {created.name}        see what it resolves to")
     print(f"  mcuhome device build {created.name}           compile it")
     print()
     print(
-        _(
-            "The configuration has no hardware in it yet — the file carries a complete, "
-            "commented\nexample to uncomment and adjust."
+        output.muted(
+            _(
+                "The configuration has no hardware in it yet — the file carries a complete, "
+                "commented\nexample to uncomment and adjust."
+            )
         )
     )
     return 0
@@ -1689,7 +1943,6 @@ def _resolve_sign_target(args: argparse.Namespace) -> tuple[Path, api.Project | 
 
 
 def _cmd_sign(args: argparse.Namespace, output: Output) -> int:
-    del output
     target, project = _resolve_sign_target(args)
     # One verb, two report shapes, chosen by which file the directory
     # holds. A local-dev build dir carries build-manifest.json (the manifest
@@ -1701,19 +1954,24 @@ def _cmd_sign(args: argparse.Namespace, output: Output) -> int:
     plan, data, ota_image = _apply_manifest_signature(
         target, key=args.signing_key, env=_process_env(), project=project
     )
-    print(f"Signed the application image of {plan.out_dir} with {plan.key}:")
+    print(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} Signed the application "
+        f"image of {output.path(plan.out_dir)} with {output.path(plan.key)}:"
+    )
     for path in plan.outputs:
-        print(f"  {path}")
+        print(f"  {output.path(path)}")
     if ota_image is not None:
         print()
-        print(_ota_note(ota_image))
+        print(_ota_note(ota_image, output=output))
     print()
     print(
-        f"imgtool sign --version {plan.parameters.version} "
-        f"--header-size {plan.parameters.header_size} "
-        f"--slot-size {plan.parameters.slot_size} --align {plan.parameters.align}\n"
-        "  — the parameters the build manifest states, which are the ones the build "
-        "would have\n    used itself."
+        output.muted(
+            f"imgtool sign --version {plan.parameters.version} "
+            f"--header-size {plan.parameters.header_size} "
+            f"--slot-size {plan.parameters.slot_size} --align {plan.parameters.align}\n"
+            "  — the parameters the build manifest states, which are the ones the build "
+            "would have\n    used itself."
+        )
     )
     if data.get("merged") is None:
         print()
@@ -1898,13 +2156,19 @@ def _cmd_config_print(args: argparse.Namespace, output: Output) -> int:
     if output.machine:
         output.result({"ok": True, "config": data})
         return phases.EXIT_OK
-    rows: list[tuple[str, str, str]] = [("option", "value", "origin")]
+    rows: list[list[str | output_module.Cell]] = [["option", "value", "origin"]]
     for name, entry in data.items():
         origin = str(entry["origin"])
         if entry["source"] and origin != "default":
             origin = f"{origin} ({entry['source']})"
-        rows.append((name, _config_value_text(entry["value"]), origin))
-    print(output_module.format_table(rows))
+        rows.append(
+            [
+                name,
+                _config_value_text(entry["value"]),
+                output_module.Cell(origin, (output_module.DIM,)),
+            ]
+        )
+    print(output_module.format_table(rows, header=True, output=output))
     return phases.EXIT_OK
 
 
@@ -2041,7 +2305,7 @@ def _cmd_device_list(args: argparse.Namespace, output: Output) -> int:
         print(_("No devices yet."))
         print(_("  mcuhome device new <name> --board <target>    scaffold the first one"))
         return phases.EXIT_OK
-    rows: list[tuple[str, str, str, str]] = [("device", "board", "status", "build")]
+    rows: list[list[str | output_module.Cell]] = [["device", "board", "status", "build"]]
     for device in devices:
         problems = int(device["problems"])  # type: ignore[arg-type]
         status = (
@@ -2050,8 +2314,17 @@ def _cmd_device_list(args: argparse.Namespace, output: Output) -> int:
             else (_("1 problem") if problems == 1 else _("{n} problems").format(n=problems))
         )
         build = _("signed") if device["signed"] else (_("unsigned") if device["built"] else "-")
-        rows.append((str(device["name"]), str(device["board"] or "?"), status, build))
-    print(output_module.format_table(rows))
+        rows.append(
+            [
+                str(device["name"]),
+                str(device["board"] or "?"),
+                output_module.Cell(
+                    status, (output_module.GREEN,) if device["ok"] else (output_module.RED,)
+                ),
+                output_module.Cell(build, () if device["signed"] else (output_module.DIM,)),
+            ]
+        )
+    print(output_module.format_table(rows, header=True, output=output))
     return phases.EXIT_OK
 
 
@@ -2073,15 +2346,16 @@ def _cmd_device_boards(args: argparse.Namespace, output: Output) -> int:
     if output.machine:
         output.result({"ok": True, "boards": supported, "planned": planned})
         return phases.EXIT_OK
-    print(_("Boards MCUHome builds for:"))
-    rows = [(entry["name"], ", ".join(entry["transports"])) for entry in supported]
-    for line in output_module.format_table(rows).splitlines():
-        print(f"  {line}")
+    print(output.heading(_("Boards MCUHome builds for:")))
+    rows = [[entry["name"], ", ".join(entry["transports"])] for entry in supported]
+    print(output_module.format_table(rows, indent="  ", output=output))
     print()
-    print(_("Planned, not usable yet:"))
-    planned_rows = [(entry["name"], entry["status"]) for entry in planned]
-    for line in output_module.format_table(planned_rows).splitlines():
-        print(f"  {line}")
+    print(output.heading(_("Planned, not usable yet:")))
+    planned_rows: list[list[str | output_module.Cell]] = [
+        [entry["name"], output_module.Cell(entry["status"], (output_module.DIM,))]
+        for entry in planned
+    ]
+    print(output_module.format_table(planned_rows, indent="  ", output=output))
     print()
     print(_("Details: {url}").format(url=_docs_url("device-supported-boards")))
     return phases.EXIT_OK

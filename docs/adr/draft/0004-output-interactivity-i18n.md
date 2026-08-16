@@ -206,6 +206,53 @@ the compile log scrolled the terminal away. Decided and built
   vocabulary like the verbs; `-o json-stream` gained `context` and
   `artifacts` (additive).
 
+## The window belongs to the step producing output (PO 2026-08-16)
+
+The first cut painted the frame from the first step on, so `validate`
+and `context` — which write no log lines at all — sat under an empty
+box that read as output gone missing. Corrected:
+
+- The frame **opens with the first log line** of a step and **closes
+  when that step ends**; before and between, only the step line (and,
+  once a log exists, the pointer to it) is painted. A build spends its
+  context, artifact and signing steps without a frame, which is honest:
+  those steps produce no log.
+- Steps that establish something **say so in one line that stays**
+  (`view.note`, written above the repainted block, never rewound over,
+  never in `build.log`): `validate` names board, transport, Matter and
+  the endpoint/channel counts; `context` names the SDK version, the
+  Zephyr line, the patches (by name, or "no patches"), the file count
+  and — once locked — the context ID.
+- The facts behind those lines come through the same seam as the steps:
+  `BuildRequest.on_step` takes optional keyword **facts**, and a step
+  may report itself twice — once on entry, once with what it found out.
+  The machine modes carry the facts as `progress` data (append-only,
+  consumers ignore what they do not know); the human rendering is the
+  CLI's, out of `mcuhome.workbench.contextdir.context_facts`, which
+  reads them back off the written context rather than trusting a
+  caller's memory of it.
+
+## Tables and color (PO 2026-08-16)
+
+The build summary was a wall of same-colored key-value lines. One table
+style (`output.format_table`, now with per-column alignment, an
+optional header row and `Cell` for a colored cell), and:
+
+- **Memory** is one row per image, one column per region, rounded to
+  whole KiB and whole percent — the exact bytes stay in `-o json` and
+  the build report. `IDT_LIST` is dropped: Zephyr collects interrupt
+  metadata in a bogus region at a made-up address that the final link
+  discards, so it is not memory on the device. The filter is **by
+  name** — a region that genuinely exists and is empty stays in the
+  table (PO: no blanket dropping of zero values).
+- **Flash layout** is a table too (partition, device, range, size),
+  with class/mode/staging as a muted subtitle.
+- **Color palette**, deliberately small and non-informational (a
+  `--color never` run says everything): headings bold, labels and
+  supporting prose dim, paths blue, success green, warnings yellow,
+  refusals red. Fill levels are plain below 75 %, yellow from 75 %, red
+  from 90 % — emphasis on a number that is printed either way.
+
 ## Open points
 
 - The exact JSON document schemas per command (the old build/validate
