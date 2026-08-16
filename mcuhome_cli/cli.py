@@ -115,6 +115,7 @@ import asyncio
 import importlib.metadata
 import json
 import os
+import re
 import shutil
 import signal
 import sys
@@ -1199,6 +1200,50 @@ def _count(number: int, thing: str) -> str:
     return f"{number} {thing}" if number == 1 else f"{number} {thing}s"
 
 
+#: How ``--max-wait`` is written: seconds, or a number with a unit.
+_DURATION = re.compile(r"(\d+)\s*([smh]?)\Z")
+_DURATION_UNITS = {"": 1, "s": 1, "m": 60, "h": 3600}
+
+
+def parse_duration(text: str) -> float:
+    """``90`` / ``90s`` / ``30m`` / ``6h`` as seconds. ``0`` is no bound."""
+    match = _DURATION.fullmatch(text.strip().lower())
+    if match is None:
+        raise argparse.ArgumentTypeError(
+            f'"{text}" is not a duration. Write seconds, or a number with a unit: '
+            "90s, 30m, 6h — and 0 for no limit."
+        )
+    return float(match.group(1)) * _DURATION_UNITS[match.group(2)]
+
+
+def format_duration(seconds: float) -> str:
+    """A wait as a person reads it — ``45s``, ``2m 30s``, ``1h 5m``."""
+    whole = max(0, int(seconds))
+    if whole < 60:
+        return f"{whole}s"
+    if whole < 3600:
+        minutes, rest = divmod(whole, 60)
+        return f"{minutes}m" if rest == 0 else f"{minutes}m {rest}s"
+    hours, rest = divmod(whole, 3600)
+    minutes = rest // 60
+    return f"{hours}h" if minutes == 0 else f"{hours}h {minutes}m"
+
+
+def _waiting_note(wait: Any, *, output: Output) -> str:
+    """The line a client shows while a build server holds its turn.
+
+    The wait and nothing else, because the wait is all the server says:
+    the order of the queue is its own business, and a client that
+    reported a position would be reporting something no server promised.
+    """
+    parts = [
+        f"the build server is busy — trying again in {format_duration(wait.retry_after)}",
+    ]
+    if wait.waited > 0:
+        parts.append(f"waiting {format_duration(wait.waited)} so far")
+    return _note("queue", parts, output=output)
+
+
 def _transport_note(model: DeviceModel) -> str:
     network = model.network
     if network.transport == "thread" and network.thread is not None:
@@ -1362,6 +1407,20 @@ def _build_delivered(
         if note is not None:
             view.note(note)
 
+    def on_wait(wait: Any) -> None:
+        # Its own seam and not a step: nothing is being built yet, and a
+        # step bar that claimed otherwise would be showing progress that
+        # does not exist. `waiting` is an honest stage in the same sense
+        # every other one is — it says where this run is, not how far.
+        output.progress(
+            "waiting",
+            device=model.device.name,
+            retry_after_seconds=int(wait.retry_after),
+            waited_seconds=int(wait.waited),
+            attempt=wait.attempt,
+        )
+        view.waiting(_waiting_note(wait, output=output))
+
     try:
         # A hidden scratch area under the build directory: the context and
         # the session tree live here and are rebuilt each run; the durable
@@ -1381,8 +1440,13 @@ def _build_delivered(
                 ccache_dir=settings.value("ccache_dir"),
                 server=server,
                 token=token,
+                wait_for_turn=not args.no_wait,
+                max_wait_seconds=(
+                    api.DEFAULT_MAX_WAIT_SECONDS if args.max_wait is None else args.max_wait
+                ),
                 on_line=view.line,
                 on_step=on_step,
+                on_wait=on_wait,
             ),
             method=method,
         )
@@ -3508,6 +3572,30 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "--build-mode remote: bearer token for that server (a configured "
             "builder reads secrets/build-server/<name>.yaml instead)"
+        ),
+    )
+    # A busy build server holds a turn for the client it refused, so
+    # waiting is the ordinary thing and both of these narrow it. They are
+    # deliberately not mode flags (_MODE_FLAGS): a remote build is a
+    # remote build whether the mode was named outright or came from a
+    # configured builder, and a local build simply never waits.
+    build_parser_.add_argument(
+        "--no-wait",
+        action="store_true",
+        help=(
+            "building on a build server: fail at once when it is busy, instead of "
+            "waiting for the turn it offers"
+        ),
+    )
+    build_parser_.add_argument(
+        "--max-wait",
+        type=parse_duration,
+        default=None,
+        metavar="TIME",
+        help=(
+            "building on a build server: give up after waiting this long for a turn "
+            f"(default {format_duration(api.DEFAULT_MAX_WAIT_SECONDS)}; 0 waits as "
+            "long as it takes)"
         ),
     )
     build_parser_.add_argument(

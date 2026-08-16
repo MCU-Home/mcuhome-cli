@@ -284,6 +284,43 @@ destructive `flash`). The rules, pinned:
   three seconds) and what insisting costs. What cannot be caught —
   SIGKILL — is left legible in the object's own state instead.
 
+## Waiting for a turn on a build server (PO 2026-08-16)
+
+A busy build server no longer just refuses: it holds a turn for the
+client it turned away and says when to come back (project ADR 0027). So
+a remote build can now spend a long time before it starts, and the view
+had no way to say so.
+
+- **A third kind of line: one that replaces itself.** `view.waiting()`,
+  beside `line()` (into the log and the frame) and `note()` (stays, and
+  scrolls up). A note is worth keeping because it says what a step found
+  out; a wait says the same thing over and over until it stops being
+  true, and hours of it would bury the run in identical lines. On the
+  live view it is painted under the step line and replaced in place; on
+  the linear view it is printed each time, because nothing repaints
+  there and silence through a wait of hours is the one thing this must
+  not do; under a machine mode it prints nothing, because the numbers
+  already travel as `progress`.
+- **It is not a step**, and gets its own seam (`BuildRequest.on_wait`)
+  rather than a key in the step vocabulary. Nothing is being built yet
+  and may never be, and a step bar claiming otherwise would show
+  progress that does not exist. The machine modes get
+  `progress(stage="waiting", retry_after_seconds, waited_seconds,
+  attempt)` — an honest stage in the same sense as every other one: it
+  says where the run is, not how far.
+- **The line states the wait and never a position.** That is not a
+  rendering choice: the server does not send one. Order is its business
+  and a later version may admit a paying client ahead of a free one, so
+  a client that printed a place would be printing something nobody
+  promised.
+- **Two flags, and they are not mode flags.** `--no-wait` fails at once;
+  `--max-wait TIME` bounds the wait (`30m`, `6h`, `0` for no bound;
+  default six hours). They stay out of `_MODE_FLAGS` because a remote
+  build is a remote build whether the mode was named outright or came
+  from a configured builder — and a local build never waits at all.
+- **Output is proof the wait is over.** The live view drops the line the
+  moment a log line arrives, whoever forgot to take it away.
+
 ## Open points
 
 - The exact JSON document schemas per command (the old build/validate

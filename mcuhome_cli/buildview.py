@@ -233,6 +233,17 @@ class _ViewBase:
         """
         self._on_note(text)
 
+    def waiting(self, text: str | None) -> None:
+        """One line that **replaces itself**: what this run is waiting for.
+
+        Not a note, and the difference is scrollback. A note says what a
+        step found out and is worth keeping; waiting for a build server's
+        queue says the same thing over and over until it stops being
+        true, and six hours of it would bury the run in identical lines.
+        ``None`` takes it away.
+        """
+        self._on_waiting(text)
+
     def running(self) -> str | None:
         """The key of the step currently running, if one is."""
         for entry in self.steps:
@@ -280,6 +291,9 @@ class _ViewBase:
     def _on_note(self, text: str) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
+    def _on_waiting(self, text: str | None) -> None:  # pragma: no cover - overridden
+        raise NotImplementedError
+
     def _on_close(self, success: bool) -> None:  # pragma: no cover - overridden
         raise NotImplementedError
 
@@ -321,6 +335,14 @@ class PlainView(_ViewBase):
         if not self.output.machine:
             print(text)
 
+    def _on_waiting(self, text: str | None) -> None:
+        # Nothing repaints here, so a wait is a line each time rather
+        # than a line that changes — and silence through a wait of hours
+        # is the one thing this must not do. Taking it away prints
+        # nothing: what followed says the wait is over.
+        if text is not None and not self.output.machine:
+            print(text, flush=True)
+
     def _on_close(self, success: bool) -> None:
         pass
 
@@ -340,6 +362,10 @@ class LiveView(_ViewBase):
     #: would claim their output went missing.
     _frame_step: str | None = None
     _wrote_log: bool = False
+    #: What this run is waiting for, painted under the step line and
+    #: replaced rather than repeated. A build server's queue is the only
+    #: thing that says this today.
+    _status: str | None = None
 
     def _terminal(self) -> TextIO:
         return self.stream if self.stream is not None else sys.stdout
@@ -358,6 +384,8 @@ class LiveView(_ViewBase):
     def _on_line(self, text: str) -> None:
         with self._lock:
             self._wrote_log = True
+            # Output is proof the wait is over, whoever forgot to say so.
+            self._status = None
             opened = self._frame_step is None
             if opened:
                 self._frame_step = self.running()
@@ -382,6 +410,11 @@ class LiveView(_ViewBase):
             self._painted_lines = 0
         self._paint(force=True)
 
+    def _on_waiting(self, text: str | None) -> None:
+        with self._lock:
+            self._status = text
+        self._paint(force=True)
+
     def _on_close(self, success: bool) -> None:
         # Collapse: repaint one last time without the frame, leaving the
         # settled step line and the log pointer as the run's residue.
@@ -389,6 +422,7 @@ class LiveView(_ViewBase):
             if self._closed:
                 return
             self._closed = True
+            self._status = None
             terminal = self._terminal()
             self._rewind(terminal)
             terminal.write(self.step_line() + "\n")
@@ -431,6 +465,8 @@ class LiveView(_ViewBase):
             terminal = self._terminal()
             self._rewind(terminal)
             lines = [self.step_line()]
+            if self._status is not None:
+                lines.append(_clip(self._status, width))
             if self._frame_step is not None:
                 lines.append(self._pointer())
                 lines.append(self.output.muted("┌" + "─" * (width - 2) + "┐"))

@@ -11,6 +11,7 @@ import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, make_project
@@ -20,7 +21,7 @@ from mcuhome.compiler.generate import APP_DIR
 from mcuhome.model import __version__ as model_version
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import MODEL_VERSION
-from mcuhome.workbench import buildmethods, imgtool, sessionclient, signing
+from mcuhome.workbench import api, buildmethods, imgtool, sessionclient, signing
 from mcuhome.workbench.project import Project
 
 from mcuhome_cli import __version__ as cli_version
@@ -2458,3 +2459,90 @@ def test_a_failure_in_json_stream_is_error_verbs_plus_the_failure_document(
     assert lines[-1]["verb"] == "result"
     assert lines[-1]["document"]["ok"] is False
     assert lines[-1]["document"]["errors"]
+
+
+# --------------------------------------------------------------------------
+# Waiting for a turn on a busy build server
+# --------------------------------------------------------------------------
+
+
+def test_a_duration_is_seconds_or_a_number_with_a_unit() -> None:
+    assert cli.parse_duration("90") == 90
+    assert cli.parse_duration("90s") == 90
+    assert cli.parse_duration("30m") == 1800
+    assert cli.parse_duration(" 6H ") == 21600
+    assert cli.parse_duration("0") == 0
+    for bad in ("soon", "-5", "1d", "1.5h", ""):
+        with pytest.raises(argparse.ArgumentTypeError):
+            cli.parse_duration(bad)
+
+
+def test_a_wait_reads_the_way_a_person_says_it() -> None:
+    assert cli.format_duration(45) == "45s"
+    assert cli.format_duration(60) == "1m"
+    assert cli.format_duration(150) == "2m 30s"
+    assert cli.format_duration(3600) == "1h"
+    assert cli.format_duration(3900) == "1h 5m"
+
+
+def test_the_waiting_line_says_the_wait_and_never_a_position() -> None:
+    """The order of the queue is the server's business.
+
+    A client that reported a position would be reporting something no
+    server promised — and a later one that admits a paying client ahead
+    of a free one would make it false.
+    """
+    output = Output(mode="human", color=False, interactive=False)
+    wait = SimpleNamespace(retry_after=120.0, waited=0.0, attempt=1)
+    first = cli._waiting_note(wait, output=output)
+    assert "2m" in first
+    assert "so far" not in first
+
+    later = cli._waiting_note(
+        SimpleNamespace(retry_after=60.0, waited=300.0, attempt=6), output=output
+    )
+    assert "5m so far" in later
+    for word in ("position", "place", "ahead", "queue position"):
+        assert word not in later.lower()
+
+
+def test_the_wait_bounds_reach_the_build_request(tmp_path, monkeypatch, capsys) -> None:
+    """Both flags are the caller's policy, not the mode's.
+
+    They are deliberately not mode flags: a remote build is a remote
+    build whether the mode was named outright or came from a configured
+    builder, and a local build never waits at all.
+    """
+    seen: list[buildmethods.BuildRequest] = []
+
+    async def refuse(request, *, method):
+        seen.append(request)
+        raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
+
+    monkeypatch.setattr(cli.api, "run_build", refuse)
+    argv = [
+        "device",
+        "build",
+        str(EXAMPLE),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--build-mode",
+        "remote",
+        "--build-server",
+        "ws://build.example/ws",
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    assert main([*argv, "--max-wait", "30m"]) == 1
+    capsys.readouterr()
+    assert seen[-1].max_wait_seconds == 1800
+    assert seen[-1].wait_for_turn is True
+
+    assert main([*argv, "--no-wait"]) == 1
+    capsys.readouterr()
+    assert seen[-1].wait_for_turn is False
+    assert seen[-1].max_wait_seconds == api.DEFAULT_MAX_WAIT_SECONDS
+
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert seen[-1].max_wait_seconds == api.DEFAULT_MAX_WAIT_SECONDS

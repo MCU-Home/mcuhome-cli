@@ -279,3 +279,59 @@ def test_a_closed_view_marks_every_open_step(tmp_path) -> None:
     view.step("compile")
     view.close(success=False)
     assert [entry.state for entry in view.steps] == [DONE, FAILED, "pending"]
+
+
+# --------------------------------------------------------------------------
+# Waiting for a turn on a build server
+# --------------------------------------------------------------------------
+
+
+def test_a_wait_replaces_itself_instead_of_piling_up(tmp_path) -> None:
+    """Not a note, and the difference is scrollback.
+
+    A note says what a step found out and is worth keeping. Waiting for a
+    queue says the same thing over and over until it stops being true,
+    and six hours of it would bury the run in identical lines.
+    """
+    view, stream = _live(tmp_path)
+    view.step("compile")
+    for _ in range(3):
+        view.waiting("  queue     the build server is busy")
+    last_frame = stream.getvalue().rsplit("\x1b[0J", 1)[-1]
+    assert last_frame.count("the build server is busy") == 1
+    # And it sits with the step line, above wherever the log frame goes.
+    assert last_frame.index("compile") < last_frame.index("the build server is busy")
+
+
+def test_output_is_proof_the_wait_is_over(tmp_path) -> None:
+    """Whoever forgot to take the line away, the build itself says so."""
+    view, stream = _live(tmp_path)
+    view.step("compile")
+    view.waiting("  queue     the build server is busy")
+    view.line("-- west build --")
+    last_frame = stream.getvalue().rsplit("\x1b[0J", 1)[-1]
+    assert "the build server is busy" not in last_frame
+    assert "-- west build --" in last_frame
+
+
+def test_a_wait_can_be_taken_away(tmp_path) -> None:
+    view, stream = _live(tmp_path)
+    view.step("compile")
+    view.waiting("  queue     the build server is busy")
+    view.waiting(None)
+    assert "the build server is busy" not in stream.getvalue().rsplit("\x1b[0J", 1)[-1]
+
+
+def test_a_linear_run_prints_every_wait_and_a_machine_mode_prints_none(tmp_path, capsys) -> None:
+    """Nothing repaints here, so silence through a wait of hours is the
+    one thing this must not do — and a machine mode carries the numbers
+    as `progress` data already."""
+    plain = PlainView(_steps(), output=PLAIN, log_path=tmp_path / "build.log")
+    plain.waiting("  queue     busy, trying again in 1m")
+    plain.waiting("  queue     busy, trying again in 1m")
+    plain.waiting(None)
+    assert capsys.readouterr().out.count("busy, trying again in 1m") == 2
+
+    machine = PlainView(_steps(), output=MACHINE, log_path=tmp_path / "machine.log")
+    machine.waiting("  queue     busy, trying again in 1m")
+    assert capsys.readouterr().out == ""
