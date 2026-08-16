@@ -1375,6 +1375,10 @@ def _build_delivered(
                 signing_pub=signing_pub,
                 sdk_sources=settings.value("sdk_sources"),
                 image=None if remote else reference,
+                # Where this machine keeps its compiler cache. Unset
+                # everywhere means the user's cache directory, which is
+                # the answer for everyone who never thinks about it.
+                ccache_dir=settings.value("ccache_dir"),
                 server=server,
                 token=token,
                 on_line=view.line,
@@ -2940,6 +2944,8 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
             ),
         )
 
+    record("compiler cache", *_cache_verdict(settings, env))
+
     if project is not None and project.secrets_dir.is_dir():
         complaints = []
         for file in sorted(project.secrets_dir.rglob("*")):
@@ -2964,6 +2970,30 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
         for line in rest:
             print(" " * 21 + line)
     return phases.EXIT_FAILURE if failed else phases.EXIT_OK
+
+
+def _cache_verdict(settings: api.Settings | None, env: dict[str, str]) -> tuple[str, str]:
+    """Where the compiler cache is, and how much of it there is.
+
+    Worth a line of its own because it is the difference between a build
+    that takes twenty minutes and one that takes a few — and because it
+    is the one directory MCUHome keeps outside the project, so nobody
+    finds it by looking around.
+    """
+    configured = None if settings is None else settings.value("ccache_dir")
+    root = Path(configured) if configured else container.ccache_directory(env)
+    sizes = []
+    for role in ("cache-local", "cache-shared"):
+        directory = root / role
+        if not directory.is_dir():
+            sizes.append(_("{role}: not created yet").format(role=role))
+            continue
+        total = sum(item.stat().st_size for item in directory.rglob("*") if item.is_file())
+        # Whole MiB: the number answers "is anything in there", and a
+        # cache measured to the byte invites a reader to watch it.
+        size = _("empty") if total == 0 else f"{round(total / 1024 / 1024)} MiB"
+        sizes.append(f"{role}: {size}")
+    return "ok", f"{root} ({', '.join(sizes)})"
 
 
 def _stack_version() -> str:

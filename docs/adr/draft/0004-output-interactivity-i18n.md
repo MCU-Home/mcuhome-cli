@@ -183,7 +183,7 @@ the compile log scrolled the terminal away. Decided and built
 - **Step line.** Every build states its steps up front and repaints
   them in place: green done, yellow running, red failed, plain pending.
   Each label carries the execution place — `compile (container
-  zephyr-4.4.0-r8)`, `compile (remote attic)`, `compile (local west)`,
+  zephyr-4.4.0-r9)`, `compile (remote attic)`, `compile (local west)`,
   `sign (local)` — because making *where* visible is half the point.
 - **The window.** The build log shows through a fixed 15-line frame
   (`WINDOW_LINES`), newest at the bottom, repainted in place

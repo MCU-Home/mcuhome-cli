@@ -9,7 +9,7 @@ the terminal away. This module answers both without asking the user to
 scroll:
 
 **The step line.** Every build states its steps up front, each labeled
-with where it runs (``compile (container zephyr-4.4.0-r8)``, ``sign
+with where it runs (``compile (container zephyr-4.4.0-r9)``, ``sign
 (local)``), and the line is repainted in place as they progress: green
 done, yellow running, red failed, plain not yet.
 
