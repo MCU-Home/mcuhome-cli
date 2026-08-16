@@ -1499,7 +1499,7 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
 def test_init_then_new_is_the_whole_start(tmp_path, capsys, monkeypatch) -> None:
     """The fresh-machine loop: init creates the project, new the device."""
     monkeypatch.chdir(tmp_path)
-    assert main(["init"]) == 0
+    assert main(["project", "init"]) == 0
     out = capsys.readouterr().out
     assert "Created an MCUHome project" in out
     assert ".mcuhome-project-root" in out
@@ -1515,22 +1515,22 @@ def test_init_then_new_is_the_whole_start(tmp_path, capsys, monkeypatch) -> None
 
 def test_init_on_an_existing_project_is_a_no_op(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
-    assert main(["init"]) == 0
+    assert main(["project", "init"]) == 0
     capsys.readouterr()
-    assert main(["init"]) == 0
+    assert main(["project", "init"]) == 0
     assert "already an MCUHome project" in capsys.readouterr().out
 
 
 def test_init_refuses_a_directory_with_existing_work(tmp_path, capsys, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "notes.txt").write_text("mine\n", "utf-8")
-    assert main(["init"]) == 1
+    assert main(["project", "init"]) == 1
     err = capsys.readouterr().err
     assert "not empty" in err
     assert "notes.txt" in err
     assert "--force" in err
     assert not (tmp_path / ".mcuhome-project-root").exists()
-    assert main(["init", "--force"]) == 0
+    assert main(["project", "init", "--force"]) == 0
     assert (tmp_path / ".mcuhome-project-root").is_file()
     assert (tmp_path / "notes.txt").read_text("utf-8") == "mine\n"
 
@@ -1541,7 +1541,7 @@ def test_new_outside_any_project_points_at_init(tmp_path, capsys, monkeypatch) -
     assert main(["device", "new", "bench-node", "--board", "nrf7002dk/nrf5340/cpuapp"]) == 1
     err = capsys.readouterr().err
     assert "No MCUHome project" in err
-    assert "mcuhome init" in err
+    assert "mcuhome project init" in err
     assert not (tmp_path / "devices").exists()
 
 

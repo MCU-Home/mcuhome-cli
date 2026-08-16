@@ -24,16 +24,21 @@ noun-grouped, explicit, extensible.
 
 ### 1. Shape: one noun namespace, explicit names
 
-Device-scoped operations live under the `device` noun. Names are
-deliberately explicit (`sign-firmware`, not `sign` — a future
-`sign-ota-update` may join). Project-scoped and environment-scoped
-commands stay top-level.
+Device-scoped operations live under the `device` noun, project-scoped
+ones under `project` (PO 2026-08-16, with the project-version round:
+`init` moved there and `info`/`upgrade` joined it — three commands about
+the project *itself* are a noun, not three top-level verbs).
+Environment-scoped commands stay top-level. Names are deliberately
+explicit (`sign-firmware`, not `sign` — a future `sign-ota-update` may
+join).
 
 ### 2. The command set
 
 | Command | What it does | Status |
 |---|---|---|
-| `init` | Creates a project in the current (or `--project-dir`) directory: `mcuhome.yaml`, `devices/`, `secrets/` (mode 700) and a `.gitignore` containing `secrets/`. Warns and refuses on a non-empty directory; `--force` proceeds anyway | new |
+| `project init [dir]` | Creates a project in the named (or current, or `--project-dir`) directory, creating missing directories on the way: `mcuhome.yaml`, `devices/`, `secrets/` (mode 700), a `.gitignore` containing `secrets/`, and the project file with its version and id. Warns and refuses on a non-empty directory; `--force` proceeds anyway | new (was top-level `init`) |
+| `project info [dir]` | What this project is: path, id and short id, project version, devices. Answers for an **outdated** project too — it is the command a person runs after another one refused | new (2026-08-16) |
+| `project upgrade [dir]` | Migrates a project to the layout this MCUHome speaks (firmware ADR 0022 §1.1). `--dry-run` prints the plan and the long explanations and changes nothing; `--confirm-upgrade ID` confirms without a prompt | new (2026-08-16) |
 | `config` | Reads/writes configuration values; scopes `--system`, `--user`, `--project` (default project). `config print` resolves the full inheritance tree and shows every effective value with its origin layer | new |
 | `device new <device> --name NAME --board TARGET` | Scaffolds a device folder with a starter `main.yaml`. Draws **no** credentials (that is `matter-pairing --new`'s job, so builds stay byte-identical). The human-readable `--name` is destined for the device's Matter identity (BasicInformation) — emitting it is the generator's job, a platform work item | exists (moves under `device`, gains `--name`) |
 | `device validate <device>` | Stages 1-3, diagnostics rendered per ADR 0004. Deliberately named `validate` (not `verify`) — `verify` is a session-protocol action and stays one | exists |
@@ -71,6 +76,7 @@ depends on the spellings — the E62 rule):
 | `--method` / `MCUHOME_BUILD_METHOD` | `--build-mode` + the builder configuration (firmware ADR 0023) |
 | `--server`, `--token`, `MCUHOME_BUILD_SERVER/_TOKEN`, `build-servers.toml`, `tokens/<label>` | named builders + `secrets/build-server/<name>.yaml` (firmware ADR 0023) |
 | `--config-root`, tree auto-discovery | `--project-dir` + `mcuhome.yaml` upward search (firmware ADR 0022) |
+| top-level `init` | `project init` — no alias, and no "moved" hint either (PO 2026-08-16: the CLI has no users yet, so the break is free) |
 
 ## Consequences
 
@@ -172,7 +178,7 @@ is a decision, not a style preference.
   *that*, once, not after every corrected argument. Parser syntax
   errors (exit 2) stay ahead of it, the convention of every CLI: a
   syntactically broken invocation has no command yet.
-- **`mcuhome init` rendering**: created files first, then directories
+- **`mcuhome project init` rendering**: created files first, then directories
   with a trailing slash, painted in ls's blue when color is on; the
   next-steps point at `device new --help` and `mcuhome --help` (whose
   epilog carries the workflow) rather than at an argument the reader
@@ -233,6 +239,50 @@ command-vocabulary rule rather than a build one:
 - Read-only commands (`validate`, `list`, `boards`, `config`, `doctor`,
   `matter-pairing`) do not take it: they touch the configuration, not
   the build output.
+
+## The project noun and its upgrade (PO 2026-08-16)
+
+The project-version round of firmware ADR 0022 §1.1 lands here as three
+commands and one new interaction. What is pinned:
+
+- **The noun.** `project init` / `project info` / `project upgrade`;
+  top-level `init` is gone without an alias and without a hint.
+- **The path argument.** All three take an optional directory. Given
+  one, it names *that* directory and the upward search is off — the
+  rule `--project-dir` follows everywhere. Without one, `init` means
+  here and the other two search upward, because a person standing in
+  `devices/porch` means their project. `init` creates missing
+  directories on the way; `upgrade` and `info` require an existing
+  project.
+- **The confirmation.** An upgrade cannot be undone, so it asks for a
+  typed `yes` — not a keypress, not a default-yes. Without a terminal
+  the flag is `--confirm-upgrade ID`, which takes the **project's own
+  id** (full or the six-character short form) rather than a
+  `--force`-shaped switch: a `--force` in a script is set once and then
+  applies to whatever directory the script ends up in, while an id
+  refuses to name the wrong project. `--no-interactive` without it is
+  an exit-2 usage refusal that prints the exact command to run.
+- **The order** (the load-bearing part): take the project — which
+  renames its file, so nothing new can start — *then* wait for builds
+  that were already running, *then* ask. Asking first and waiting after
+  would leave a person watching a wait they may cancel at the exact
+  moment it ends, with the upgrade starting into the cancellation.
+- **Ctrl+C.** During the wait it cancels immediately and puts the
+  project back. During the migrations it does **not**: the current
+  migration finishes, the version reached is written, and the run stops
+  cleanly, because interrupting a migration half-way is what breaks a
+  project. Three presses within three seconds abort anyway, after a
+  warning saying what that costs; the window is a window, so a stray
+  press an hour later only prints the hint again. SIGTERM behaves like
+  one press. SIGKILL cannot be caught, and the renamed project file is
+  what makes that case legible afterwards.
+- **`--dry-run`** prints the plan and every migration's long
+  explanation and touches nothing — including the rename.
+- **Output.** All three commands take `-o json`: the dashboard will use
+  the API directly, but a user's own scripts drive the CLI.
+- **The docs link.** The end of an upgrade, and the refusal after an
+  interrupted one, point at `t.mcuhome.org/cli/docs/project-upgrade/…`
+  — the one place that can say "restore your backup" at length.
 
 ## Open points
 

@@ -11,7 +11,9 @@ surface.
 
 ::
 
-    mcuhome init             [dir]       # create a project directory
+    mcuhome project init     [dir]       # create a project directory
+    mcuhome project info     [dir]       # where, which id, which version
+    mcuhome project upgrade  [dir]       # migrate it to the current layout
     mcuhome config           <verb>      # print/get/set/unset configuration
     mcuhome device new       <device>    # scaffold a device folder
     mcuhome device validate  <device>    # stages 1-3, prints a summary
@@ -114,7 +116,9 @@ import importlib.metadata
 import json
 import os
 import shutil
+import signal
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -157,7 +161,7 @@ __all__ = [
 
 #: Directory the per-device build trees are created in, at the project
 #: root. A sibling of ``devices/``, never inside it — build output must
-#: not turn up in the user's config diffs, and ``mcuhome init`` writes
+#: not turn up in the user's config diffs, and ``mcuhome project init`` writes
 #: it into the project's ``.gitignore`` (ADR 0022).
 BUILD_DIR = "build"
 
@@ -204,7 +208,11 @@ def _optional_project(args: argparse.Namespace) -> api.Project | None:
     explicit = getattr(args, "project_dir", None)
     if explicit is None and not env.get(api.PROJECT_DIR_VAR):
         found = api.find_project_root(Path.cwd())
-        return None if found is None else api.Project(root=found, discovered=True)
+        # project_at, not a bare Project: a project that was found still
+        # has to be one these tools speak, and skipping the version check
+        # here would let exactly the commands that work without a project
+        # work *inside an outdated one* instead.
+        return None if found is None else api.project_at(found)
     return api.resolve_project(explicit, env=env, cwd=Path.cwd())
 
 
@@ -1818,25 +1826,63 @@ def _pairing_model(credentials: pairing.Pairing) -> PairingModel:
     )
 
 
-def _cmd_init(args: argparse.Namespace, output: Output) -> int:
-    """``mcuhome init``: the durable part of a project directory (ADR 0022).
+# --- the project noun (cli ADR 0003) ----------------------------------
+
+
+def _project_document(project: api.Project) -> dict[str, Any]:
+    """One project, as the machine modes describe it."""
+    file = project.file
+    return {
+        "root": str(project.root),
+        "id": None if file is None else file.id,
+        "short_id": None if file is None else file.short_id,
+        "version": None if file is None else file.version,
+        "current_version": api.PROJECT_VERSION,
+    }
+
+
+def _project_for(args: argparse.Namespace, *, require_version: bool) -> api.Project:
+    """The project a ``project`` command works on.
+
+    An explicit directory — the positional argument, or ``--project-dir``
+    — names *that* directory and disables the upward search, the same
+    rule the flag follows everywhere else. Without one the search runs,
+    because a person standing in ``devices/porch`` means their project.
+    """
+    explicit = args.directory or args.project_dir
+    return api.resolve_project(
+        None if explicit is None else Path(explicit),
+        env=_process_env(),
+        cwd=Path.cwd(),
+        require_version=require_version,
+    )
+
+
+def _cmd_project_init(args: argparse.Namespace, output: Output) -> int:
+    """``mcuhome project init``: the durable part of a project (ADR 0022).
 
     The target is the positional argument, or ``--project-dir`` when only
-    that was given (cli ADR 0003: "the current or ``--project-dir``
-    directory") — the one command where that flag may name a directory
-    that is *not* a project yet, because making it one is the job.
+    that was given — the one command where that flag may name a directory
+    that is *not* a project yet, because making it one is the job. Missing
+    directories are created on the way.
     """
-    target = Path(args.directory)
-    if args.directory == "." and args.project_dir is not None:
+    target = Path(args.directory) if args.directory is not None else Path.cwd()
+    if args.directory is None and args.project_dir is not None:
         target = args.project_dir
     target = target.resolve()
     if api.is_project_root(target) and not args.force:
-        print(f"{target} is already an MCUHome project; nothing to do.")
+        project = api.project_at(target, require_version=False)
+        output.human(
+            _("{path} is already an MCUHome project; nothing to do.").format(
+                path=output.path(target)
+            )
+        )
+        output.result({"ok": True, "created": [], "project": _project_document(project)})
         return phases.EXIT_OK
     result = api.init_project(target, force=args.force)
-    print(
-        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} Created an MCUHome "
-        f"project in {output.path(result.project.root)}:"
+    output.human(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} "
+        + _("Created an MCUHome project in {path}:").format(path=output.path(result.project.root))
     )
     # Files first, then directories with a trailing slash and ls's blue
     # (PO 2026-08-15) — what was created is legible at a glance.
@@ -1844,14 +1890,397 @@ def _cmd_init(args: argparse.Namespace, output: Output) -> int:
         shown = str(path.relative_to(result.project.root))
         if path.is_dir():
             shown = output.style(f"{shown}/", output_module.BLUE)
-        print(f"  {shown}")
-    print()
-    print(output.heading(_("Next:")))
-    print(_("  mcuhome device new --help    how to describe your first device"))
-    print(_("  mcuhome --help               every command, and the workflow"))
-    print()
-    print(_("Getting started: {url}").format(url=_docs_url("getting-started")))
+        output.human(f"  {shown}")
+    output.human()
+    output.human(output.heading(_("Next:")))
+    output.human(_("  mcuhome device new --help    how to describe your first device"))
+    output.human(_("  mcuhome --help               every command, and the workflow"))
+    output.human()
+    output.human(_("Getting started: {url}").format(url=_docs_url("getting-started")))
+    output.result(
+        {
+            "ok": True,
+            "created": [str(path) for path in result.created],
+            "project": _project_document(result.project),
+        }
+    )
     return phases.EXIT_OK
+
+
+def _cmd_project_info(args: argparse.Namespace, output: Output) -> int:
+    """``mcuhome project info``: which project this is, and which version.
+
+    Deliberately readable on an **outdated** project: this is the command
+    a person runs when another one just refused, and answering "upgrade
+    first" to that question would be a circle.
+    """
+    project = _project_for(args, require_version=False)
+    file = project.file
+    assert file is not None  # a resolved project always has one
+    devices = project.device_names()
+    plan = api.upgrade_plan(file.version)
+
+    rows: list[list[str | output_module.Cell]] = [
+        [output.muted(_("Project")), output.path(project.root)],
+        [
+            output.muted(_("Id")),
+            f"{file.id}  {output.muted(_('(short: {short})').format(short=file.short_id))}"
+            if file.id
+            else output.muted(_("none yet — this project predates project ids")),
+        ],
+        [
+            output.muted(_("Version")),
+            f"{file.version}  "
+            + (
+                output.style(_("(current)"), output_module.GREEN)
+                if not plan
+                else output.style(
+                    _("(needs an upgrade to {version})").format(version=api.PROJECT_VERSION),
+                    output_module.YELLOW,
+                )
+            ),
+        ],
+        [
+            output.muted(_("Devices")),
+            ", ".join(devices) if devices else output.muted(_("none yet")),
+        ],
+    ]
+    output.human(output_module.format_table(rows, output=output))
+    if plan:
+        output.human()
+        output.human(
+            _("This project needs an upgrade before it can be used:\n    {command}").format(
+                command=f"mcuhome project upgrade {project.root}"
+            )
+        )
+    output.result(
+        {
+            "ok": True,
+            "project": _project_document(project),
+            "devices": devices,
+            "upgrade_required": bool(plan),
+            "plan": [_migration_document(migration) for migration in plan],
+        }
+    )
+    return phases.EXIT_OK
+
+
+def _migration_document(migration: api.Migration) -> dict[str, Any]:
+    return {
+        "name": migration.name,
+        "from_version": migration.from_version,
+        "to_version": migration.to_version,
+        "description": migration.description,
+        "details": migration.details,
+    }
+
+
+def _print_upgrade_plan(
+    project: api.Project,
+    plan: Sequence[api.Migration],
+    *,
+    output: Output,
+) -> None:
+    """What the upgrade would do — the text a user approves."""
+    file = project.file
+    assert file is not None
+    named = (
+        f"  {output.muted(_('(id {short})').format(short=file.short_id))}" if file.short_id else ""
+    )
+    where = _("Upgrading the project in {path}").format(path=output.path(project.root))
+    output.human(where + named)
+    output.human(
+        _("from project version {old} to {new}:").format(old=file.version, new=plan[-1].to_version)
+    )
+    output.human()
+    for number, migration in enumerate(plan, start=1):
+        output.human(f"  {number}. {migration.description}")
+
+
+def _print_upgrade_details(applied: Sequence[api.Migration], *, output: Output) -> None:
+    """The long form: what changed, and what to watch out for from now on."""
+    for migration in applied:
+        output.human()
+        output.human(output.heading(migration.description))
+        for line in migration.details.splitlines():
+            output.human(f"  {line}" if line else "")
+
+
+def _wait_for_builds(session: api.UpgradeSession, *, output: Output) -> None:
+    """Wait until nothing is working in this project's build directories.
+
+    No lock is taken: the project file is already renamed, so no build can
+    *start* — this only waits out the ones that began before the upgrade
+    did. It runs before the confirmation on purpose (PO 2026-08-16): a
+    person who types "yes" must see the upgrade begin, not a wait they
+    might interrupt at the very moment it ends.
+    """
+    announced: set[str] = set()
+    while True:
+        busy = session.running_builds()
+        if not busy:
+            if announced:
+                output.human(_("Done waiting — nothing is working in this project any more."))
+            return
+        for entry in busy:
+            if entry.name in announced:
+                continue
+            announced.add(entry.name)
+            output.progress("waiting", device=entry.name, process=entry.process)
+            output.human(
+                _("Waiting for {device}: {what} (process {process}, started {started}).").format(
+                    device=entry.name,
+                    what=entry.operation or _("a run"),
+                    process=entry.process or "?",
+                    started=entry.started or "?",
+                )
+            )
+        time.sleep(1.0)
+
+
+def _confirm_upgrade(
+    args: argparse.Namespace,
+    session: api.UpgradeSession,
+    *,
+    output: Output,
+) -> bool:
+    """The point of no return: a typed ``yes``, or the project's own id.
+
+    Not a ``--force``-shaped flag, deliberately: ``--confirm-upgrade``
+    takes the id of the project it is about, so a script that ends up in
+    the wrong directory refuses instead of migrating something else.
+    """
+    file = session.file
+    if args.confirm_upgrade is not None:
+        return file.matches(args.confirm_upgrade)
+    output.human()
+    output.human(
+        output.style(_("This cannot be undone."), output_module.YELLOW, output_module.BOLD)
+    )
+    output.human(
+        _(
+            "  Make sure you have a backup of this project, and that nothing else is\n"
+            "  working on it (a build, a flash, an editor writing files)."
+        )
+    )
+    output.human()
+    try:
+        answer = input(_("Type yes to upgrade, anything else to cancel: "))
+    except EOFError:
+        return False
+    return answer.strip().lower() == "yes"
+
+
+class _StopAfterCurrentMigration:
+    """Ctrl+C and SIGTERM stop the upgrade — between migrations, not inside one.
+
+    Cutting a migration in half is what leaves a project broken, so the
+    signal only sets a flag and the run ends at the next clean boundary.
+    A person who really wants out now is told how (three times within
+    three seconds) and what it costs; SIGKILL cannot be caught at all,
+    and that case is what the renamed project file makes visible
+    afterwards.
+    """
+
+    #: How many presses, and how close together, mean "now".
+    PRESSES = 3
+    WINDOW = 3.0
+
+    def __init__(self, output: Output) -> None:
+        self._output = output
+        self._stop = False
+        self._presses = 0
+        self._first = 0.0
+        self._previous: dict[int, Any] = {}
+
+    def requested(self) -> bool:
+        return self._stop
+
+    @property
+    def stopping(self) -> bool:
+        return self._stop
+
+    def __enter__(self) -> _StopAfterCurrentMigration:
+        for number in (signal.SIGINT, signal.SIGTERM):
+            try:
+                self._previous[number] = signal.signal(number, self._handle)
+            except ValueError:  # pragma: no cover - not the main thread
+                self._previous.clear()
+                break
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        for number, handler in self._previous.items():
+            signal.signal(number, handler)
+
+    def _handle(self, number: int, _frame: object) -> None:
+        self._stop = True
+        if number != signal.SIGINT:
+            self._output.log(_("Stopping after the current migration."))
+            return
+        now = time.monotonic()
+        if now - self._first > self.WINDOW:
+            self._first = now
+            self._presses = 0
+        self._presses += 1
+        if self._presses >= self.PRESSES:
+            self._output.log(
+                _(
+                    "Aborting now. The project is left mid-upgrade and will most "
+                    "likely be broken — restore your backup."
+                )
+            )
+            signal.signal(signal.SIGINT, self._previous.get(signal.SIGINT, signal.SIG_DFL))
+            raise KeyboardInterrupt
+        self._output.log(
+            _(
+                "Stopping after the current migration — interrupting one half-way "
+                "would break the project.\nPress Ctrl+C {presses} times within "
+                "{window:.0f} seconds to abort immediately anyway."
+            ).format(presses=self.PRESSES, window=self.WINDOW)
+        )
+
+
+def _validate_upgrade(args: argparse.Namespace, output: Output) -> list[MCUHomeError]:
+    """Argument rules of ``project upgrade``, checked before anything moves.
+
+    The confirmation is the whole rule: without a terminal to type
+    ``yes`` at, ``--confirm-upgrade`` is required and must name *this*
+    project. Problems resolving the project itself are left to the run —
+    they are refusals (exit 1), not usage errors.
+    """
+    try:
+        project = _project_for(args, require_version=False)
+    except MCUHomeError:
+        return []
+    file = project.file
+    if file is None or args.dry_run or not api.upgrade_plan(file.version):
+        return []
+    command = f"mcuhome project upgrade {project.root} --confirm-upgrade {file.token}"
+    if args.confirm_upgrade is None:
+        if output.interactive:
+            return []
+        return [
+            ConfigError(
+                _("An upgrade has to be confirmed, and there is no terminal to confirm at."),
+                hint=_(
+                    "back the project up first, then name the project you mean:\n    {command}"
+                ).format(command=command),
+            )
+        ]
+    if not file.matches(args.confirm_upgrade):
+        return [
+            ConfigError(
+                _('"{given}" does not name the project in {path}.').format(
+                    given=args.confirm_upgrade, path=project.root
+                ),
+                hint=_("pass this project's id — the short form is enough:\n    {command}").format(
+                    command=command
+                ),
+            )
+        ]
+    return []
+
+
+def _cmd_project_upgrade(args: argparse.Namespace, output: Output) -> int:
+    """``mcuhome project upgrade``: migrate a project to the current layout.
+
+    The order is the design (PO 2026-08-16): take the project — which
+    renames its file, so nothing else can start work on it — wait for
+    whatever was already running, *then* ask, then migrate.
+    """
+    project = _project_for(args, require_version=False)
+    file = project.file
+    assert file is not None
+    output.start("project-upgrade", project=str(project.root))
+    plan = api.upgrade_plan(file.version)
+    if not plan:
+        output.human(
+            _("The project in {path} is up to date (version {version}); nothing to do.").format(
+                path=output.path(project.root), version=file.version
+            )
+        )
+        output.result({"ok": True, "project": _project_document(project), "applied": []})
+        return phases.EXIT_OK
+
+    if args.dry_run:
+        _print_upgrade_plan(project, plan, output=output)
+        _print_upgrade_details(plan, output=output)
+        output.human()
+        output.human(output.muted(_("Nothing was changed (--dry-run).")))
+        output.result(
+            {
+                "ok": True,
+                "project": _project_document(project),
+                "dry_run": True,
+                "plan": [_migration_document(migration) for migration in plan],
+            }
+        )
+        return phases.EXIT_OK
+
+    try:
+        with api.upgrade_session(project.root) as session:
+            _print_upgrade_plan(project, session.plan, output=output)
+            output.human()
+            _wait_for_builds(session, output=output)
+            if not _confirm_upgrade(args, session, output=output):
+                output.human(_("Cancelled. Nothing was changed."))
+                return phases.EXIT_FAILURE
+            output.human()
+            result = _apply_upgrade(session, output=output)
+    except KeyboardInterrupt:
+        output.human()
+        output.human(_("Cancelled. Nothing was changed."))
+        return phases.EXIT_FAILURE
+
+    document = {
+        "ok": not result.stopped,
+        "project": _project_document(api.project_at(project.root, require_version=False)),
+        "from_version": result.from_version,
+        "to_version": result.to_version,
+        "stopped": result.stopped,
+        "applied": [_migration_document(migration) for migration in result.applied],
+    }
+    if result.stopped:
+        output.human()
+        output.human(
+            _("Stopped at project version {version}. Run the upgrade again to continue.").format(
+                version=result.to_version
+            )
+        )
+        output.result(document)
+        return phases.EXIT_FAILURE
+    output.human()
+    output.human(
+        f"{output.style('✓', output_module.GREEN, output_module.BOLD)} "
+        + _("Project upgraded: version {old} → {new}.").format(
+            old=result.from_version, new=result.to_version
+        )
+    )
+    _print_upgrade_details(result.applied, output=output)
+    output.human()
+    output.human(
+        _("What changed and what to do if something looks wrong: {url}").format(
+            url=_docs_url("project-upgrade")
+        )
+    )
+    output.result(document)
+    return phases.EXIT_OK
+
+
+def _apply_upgrade(session: api.UpgradeSession, *, output: Output) -> api.UpgradeResult:
+    def report(kind: str, migration: api.Migration) -> None:
+        if kind == "start":
+            output.progress("migration", name=migration.name, to_version=migration.to_version)
+            output.human(f"  {migration.description} …")
+        else:
+            output.human(
+                f"  {output.style('✓', output_module.GREEN)} "
+                + _("version {version}").format(version=migration.to_version)
+            )
+
+    with _StopAfterCurrentMigration(output) as stopper:
+        return session.apply(on_event=report, should_stop=stopper.requested)
 
 
 def _cmd_new(args: argparse.Namespace, output: Output) -> int:
@@ -2452,9 +2881,12 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
         record("project", "fail", error.message)
     else:
         if project is None:
-            record("project", "warn", _("not inside a project — mcuhome init creates one"))
+            record("project", "warn", _("not inside a project — mcuhome project init creates one"))
         else:
-            record("project", "ok", str(project.root))
+            file = project.file
+            version = "" if file is None else f" (project version {file.version}"
+            identity = "" if file is None or not file.short_id else f", id {file.short_id}"
+            record("project", "ok", f"{project.root}{version}{identity}{')' if version else ''}")
 
     settings: api.Settings | None = None
     try:
@@ -2654,13 +3086,30 @@ def _help_parser(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse
     return current
 
 
+#: Refusals a page can say more about than a hint ever should. The
+#: project-version family is the whole list today: "restore your backup"
+#: needs paragraphs, and a hint is one sentence and a command.
+_TROUBLESHOOTING = (
+    (api.UpgradeInterrupted, "project-upgrade"),
+    (api.UpgradeInProgress, "project-upgrade"),
+    (api.MigrationFailed, "project-upgrade"),
+    (api.ProjectUpgradeRequired, "project-upgrade"),
+    (api.ProjectVersionUnsupported, "project-upgrade"),
+    (api.ProjectFileError, "project-upgrade"),
+)
+
+
+def _troubleshooting_page(error: MCUHomeError) -> str | None:
+    return next((page for kind, page in _TROUBLESHOOTING if isinstance(error, kind)), None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="mcuhome",
         description="Build Zephyr firmware from an MCUHome YAML device configuration.",
         epilog=(
             "the workflow:\n"
-            "  mcuhome init                 create a project directory\n"
+            "  mcuhome project init         create a project directory\n"
             "  mcuhome device new NAME      describe a device (device boards lists the targets)\n"
             "  mcuhome device build NAME    compile its firmware\n"
             "  mcuhome device flash NAME    put it on the board\n"
@@ -2717,7 +3166,7 @@ def build_parser() -> argparse.ArgumentParser:
             help=(
                 f"the MCUHome project directory (default: {api.PROJECT_DIR_VAR}, or the "
                 f"nearest directory upward carrying {api.MARKER_FILE}); it must be one — "
-                "mcuhome init creates it"
+                "mcuhome project init creates it"
             ),
         )
         # Also accepted after the subcommand, where people reach for it.
@@ -2752,23 +3201,71 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- project-scoped, top-level (cli ADR 0003 §1) ---------------------
 
-    init_project_parser = subparsers.add_parser(
+    project_parser = subparsers.add_parser(
+        "project",
+        help="create, inspect and upgrade a project directory",
+    )
+    project_sub = project_parser.add_subparsers(dest="project_command")
+    add_bare_help(project_parser)
+    project_parser.set_defaults(func=_show_help(project_parser))
+
+    init_project_parser = project_sub.add_parser(
         "init",
         help="create an MCUHome project directory (marker, mcuhome.yaml, devices/, secrets/)",
     )
     init_project_parser.add_argument(
         "directory",
         nargs="?",
-        default=".",
-        help="where to create the project (default: here)",
+        default=None,
+        help="where to create the project, created if missing (default: here)",
     )
     init_project_parser.add_argument(
         "--force",
         action="store_true",
         help="proceed in a non-empty directory (existing files may be overwritten)",
     )
-    finish_options(init_project_parser)
-    init_project_parser.set_defaults(func=_cmd_init)
+    finish_options(init_project_parser, output=True)
+    init_project_parser.set_defaults(func=_cmd_project_init)
+
+    info_parser = project_sub.add_parser(
+        "info",
+        help="what this project is: where, which id, which version",
+    )
+    info_parser.add_argument(
+        "directory",
+        nargs="?",
+        default=None,
+        help="the project (default: the one this directory is in)",
+    )
+    finish_options(info_parser, output=True)
+    info_parser.set_defaults(func=_cmd_project_info)
+
+    upgrade_parser = project_sub.add_parser(
+        "upgrade",
+        help="migrate a project to the layout this MCUHome speaks",
+    )
+    upgrade_parser.add_argument(
+        "directory",
+        nargs="?",
+        default=None,
+        help="the project to upgrade (default: the one this directory is in)",
+    )
+    upgrade_parser.add_argument(
+        "--confirm-upgrade",
+        metavar="ID",
+        default=None,
+        help=(
+            "confirm without being asked, by naming the project: its id, or the "
+            "short form mcuhome project info prints. Required without a terminal"
+        ),
+    )
+    upgrade_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what the upgrade would change and stop; nothing is touched",
+    )
+    finish_options(upgrade_parser, output=True)
+    upgrade_parser.set_defaults(func=_cmd_project_upgrade, validate_input=_validate_upgrade)
 
     config_parser = subparsers.add_parser(
         "config",
@@ -3247,6 +3744,11 @@ def main(argv: list[str] | None = None) -> int:
         # machine's; the working directory is the CLI's to supply — it is
         # what makes "main.yaml, line 5" shorter than an absolute path.
         output.errors([error], root=getattr(args, "json_root", None), cwd=Path.cwd())
+        page = _troubleshooting_page(error)
+        if page is not None and not output.machine:
+            # Only for a person: the machine document is the contract, and
+            # a link is not part of it.
+            output.log(_("More about this: {url}").format(url=_docs_url(page)))
         return phases.EXIT_FAILURE
 
 

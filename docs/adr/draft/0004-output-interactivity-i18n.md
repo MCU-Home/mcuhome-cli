@@ -253,6 +253,37 @@ optional header row and `Cell` for a colored cell), and:
   refusals red. Fill levels are plain below 75 %, yellow from 75 %, red
   from 90 % — emphasis on a number that is printed either way.
 
+## Confirming something that cannot be undone (PO 2026-08-16)
+
+`project upgrade` is the first command that can damage a project, and
+it sets the shape for every later one (a future `clean --all`, a
+destructive `flash`). The rules, pinned:
+
+- **A typed word, not a keypress.** The prompt takes `yes` (trimmed,
+  case-insensitive) and treats everything else — including `y` and an
+  empty line — as "no". A confirmation that a stray Enter can pass is
+  not one.
+- **Non-interactive confirmation names the object, not the intent.**
+  The flag is `--confirm-upgrade <project id>`, not `--force` or
+  `--yes`: a general switch, once written into a script, confirms
+  whatever that script later points at, while an id refuses to name
+  the wrong project. The short form (six hex characters) is what a
+  person types; the full id is what a script pastes.
+- **The confirmation is a validate-phase rule.** Missing without a
+  terminal, or naming a different project, is exit 2 with the exact
+  command to run — and the run has not touched anything at that point.
+- **It comes last.** Everything the command can do without consent —
+  resolving, taking the object, waiting for other work to finish —
+  happens *before* the question, so that "yes" is followed by the
+  action and not by a wait.
+- **Cancelling is exit 1, not 0.** Nothing happened, but a script must
+  not read "done".
+- **Interrupting is a contract of its own.** During the destructive
+  part, Ctrl+C stops at the next safe boundary rather than immediately;
+  the first press says so, and says how to insist (three presses within
+  three seconds) and what insisting costs. What cannot be caught —
+  SIGKILL — is left legible in the object's own state instead.
+
 ## Open points
 
 - The exact JSON document schemas per command (the old build/validate

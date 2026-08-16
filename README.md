@@ -17,7 +17,9 @@ library. Programs never use this shell: they embed
 `mcuhome.workbench.api`, the supported programmatic surface.
 
 ```
-mcuhome init               [dir]         # create a project directory
+mcuhome project init       [dir]         # create a project directory
+mcuhome project info       [dir]         # where, which id, which version
+mcuhome project upgrade    [dir]         # migrate it to the current layout
 mcuhome config             [print|get|set|unset]  # read/write configuration values
 mcuhome device new         <device>      # scaffold a device folder
 mcuhome device validate    <device>      # stages 1-3, prints a summary
@@ -35,9 +37,13 @@ mcuhome clean              <device|--all> # remove build output (stub)
 ```
 
 Commands run inside an MCUHome **project directory** (ADR 0022): a
-directory `mcuhome init` created, found like a git checkout by
+directory `mcuhome project init` created, found like a git checkout by
 searching upward, or named explicitly (`--project-dir`,
-`MCUHOME_PROJECT_DIR`). Devices live in `devices/<name>/main.yaml`,
+`MCUHOME_PROJECT_DIR`). Its `.mcuhome-project-root` file states the
+project's layout version and a unique project id; MCUHome maintains it
+and it is not meant to be edited. When a release moves past that
+layout, every command says so and `mcuhome project upgrade` migrates
+the project — after a backup, and after a confirmation you type. Devices live in `devices/<name>/main.yaml`,
 secrets under `secrets/` (mode 700, kept out of git by the generated
 `.gitignore`), and the firmware signing key is per-project —
 `secrets/firmware/mcuboot.yaml`, generated on first need

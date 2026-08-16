@@ -209,7 +209,7 @@ class Output:
     def path(self, path: object) -> str:
         """A filesystem path a person may want to find again — blue.
 
-        The same blue ``mcuhome init`` marks directories with: in a wall
+        The same blue ``mcuhome project init`` marks directories with: in a wall
         of build output, the lines that name a file are the ones a person
         scans for.
         """

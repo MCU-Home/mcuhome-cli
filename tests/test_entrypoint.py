@@ -19,7 +19,7 @@ from mcuhome_cli.cli import build_parser, main
 #: environment-scoped commands top-level, device-scoped ones under the
 #: ``device`` noun, configuration verbs under ``config``.
 TOP_LEVEL = [
-    "init",
+    "project",
     "config",
     "device",
     "schema",
@@ -39,6 +39,7 @@ DEVICE_COMMANDS = [
     "boards",
 ]
 CONFIG_COMMANDS = ["print", "get", "set", "unset"]
+PROJECT_COMMANDS = ["init", "info", "upgrade"]
 
 
 def test_the_console_script_points_at_this_package() -> None:
@@ -75,6 +76,12 @@ def test_every_config_command_has_help(capsys, command: str) -> None:
     assert f"usage: mcuhome config {command}" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("command", PROJECT_COMMANDS)
+def test_every_project_command_has_help(capsys, command: str) -> None:
+    assert main(["project", command, "--help"]) == 0
+    assert f"usage: mcuhome project {command}" in capsys.readouterr().out
+
+
 def _choices(parser, dest: str):
     # argparse has no public accessor for its subparsers action.
     return next(action for action in parser._actions if action.dest == dest).choices
@@ -87,6 +94,7 @@ def test_the_parser_knows_exactly_the_documented_commands() -> None:
     assert sorted(top) == sorted(TOP_LEVEL)
     assert sorted(_choices(top["device"], "device_command")) == sorted(DEVICE_COMMANDS)
     assert sorted(_choices(top["config"], "config_command")) == sorted(CONFIG_COMMANDS)
+    assert sorted(_choices(top["project"], "project_command")) == sorted(PROJECT_COMMANDS)
 
 
 def test_a_bare_noun_prints_its_help_and_succeeds(capsys) -> None:
@@ -95,6 +103,8 @@ def test_a_bare_noun_prints_its_help_and_succeeds(capsys) -> None:
     assert "usage: mcuhome device" in capsys.readouterr().out
     assert main(["config"]) == 0
     assert "usage: mcuhome config" in capsys.readouterr().out
+    assert main(["project"]) == 0
+    assert "usage: mcuhome project" in capsys.readouterr().out
 
 
 def test_build_help_advertises_the_probed_flags(capsys) -> None:
@@ -126,6 +136,8 @@ def test_the_retired_spellings_are_gone(capsys) -> None:
         ["new", "x"],
         ["init-pairing", "x"],
         ["device", "init-pairing", "x"],
+        # `mcuhome init` moved into the project noun, without an alias.
+        ["init"],
     ):
         with pytest.raises(SystemExit) as caught:
             main(argv)

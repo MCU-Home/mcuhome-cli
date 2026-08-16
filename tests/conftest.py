@@ -36,7 +36,7 @@ def make_project(root: Path) -> Path:
     What the tests reach for where they used to scribble a bare tree:
     since ADR 0022 every directory a ``--project-dir`` names (and every
     root the upward search may find) has to carry the marker, so a test
-    that wants one asks ``mcuhome init``'s own implementation.
+    that wants one asks ``mcuhome project init``'s own implementation.
     """
     return init_project(root, force=root.is_dir()).project.root
 

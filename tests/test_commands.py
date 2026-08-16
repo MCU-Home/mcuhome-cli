@@ -92,7 +92,7 @@ def test_config_set_in_the_project_scope_needs_a_project(tmp_path, capsys, monke
     assert main(["config", "set", "jobs", "4"]) == 1
     err = capsys.readouterr().err
     assert "no project here" in err
-    assert "mcuhome init" in err
+    assert "mcuhome project init" in err
 
 
 def test_config_refuses_what_a_file_may_not_carry(tmp_path, capsys, monkeypatch) -> None:
@@ -120,7 +120,7 @@ def test_list_outside_a_project_refuses_toward_init(tmp_path, capsys, monkeypatc
     monkeypatch.chdir(tmp_path)
     assert main(["device", "list"]) == 1
     err = capsys.readouterr().err
-    assert "mcuhome init" in err
+    assert "mcuhome project init" in err
 
 
 def test_list_an_empty_project_names_the_next_step(tmp_path, capsys, monkeypatch) -> None:
@@ -324,7 +324,7 @@ def test_device_boards_as_a_document(capsys) -> None:
 def test_init_lists_files_first_and_marks_directories(tmp_path, capsys, monkeypatch) -> None:
     """Files, then directories with a trailing slash (PO 2026-08-15)."""
     monkeypatch.chdir(tmp_path)
-    assert main(["init"]) == 0
+    assert main(["project", "init"]) == 0
     lines = [line.strip() for line in capsys.readouterr().out.splitlines()]
     dirs = [line for line in lines if line.endswith("/")]
     assert "devices/" in dirs
