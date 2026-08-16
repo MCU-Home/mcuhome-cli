@@ -207,6 +207,33 @@ is a decision, not a style preference.
   named later step: it needs provenance through the resolved model,
   which the loader deliberately erases today.
 
+## One build directory, one operation at a time (PO 2026-08-16)
+
+Two builds of one device ran at once and the second one's fresh work
+tree deleted the first one's generated headers mid-compile; the first
+died on `autoconf.h: No such file or directory`, which explains nothing.
+The guard is a lock on the **build directory**
+(`mcuhome.workbench.build_lock`, `.mcuhome-build.lock`, an OS advisory
+lock the kernel releases when the holder ends), and the rule is a
+command-vocabulary rule rather than a build one:
+
+- **Every command that reads or writes a build directory takes it**,
+  naming what it does: `build`, `sign`, `flash`, `clean`. `device build`
+  holds it for the whole command — generate, compile, collect *and* the
+  host-side signing — not just for the compile; `device sign-firmware`
+  holds it for its run.
+- **`device flash`, `device first-time-setup` and `clean` take it the
+  day they stop being stubs**, with `operation="flash"` / `"clean"`.
+  This is the point of the rule: a build that rewrites
+  `firmware.signed.hex` while it is being flashed puts half of one image
+  and half of another on the device, and neither command could notice.
+- The refusal names the running operation, its process and its start
+  time; only a refused *build* is offered the `--build-dir` escape,
+  because only a build can go somewhere else.
+- Read-only commands (`validate`, `list`, `boards`, `config`, `doctor`,
+  `matter-pairing`) do not take it: they touch the configuration, not
+  the build output.
+
 ## Open points
 
 - `clean` semantics (what exactly is removed, per builder type).

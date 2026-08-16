@@ -7,6 +7,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -568,6 +571,64 @@ def test_the_local_build_prints_the_footprint_from_the_report(
     # The steps say what they established, and the lines stay (PO 2026-08-16).
     assert "validate  nrf7002dk/nrf5340/cpuapp · Thread router · Matter on" in out
     assert "context   SDK 0.1.0 · Zephyr 4.4 · no patches · 3 files · id 111111111111" in out
+
+
+@contextmanager
+def _build_dir_held_elsewhere(directory: Path, *, device: str, operation: str):
+    """A real second process working in *directory*, released on the way out.
+
+    A second process and not a second lock: within one process the lock
+    is re-entrant on purpose (a build holds its directory across compile
+    and signing), so nesting one here would prove nothing.
+    """
+    code = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from mcuhome.workbench.api import build_lock\n"
+        f"held = build_lock(Path({str(directory)!r}), device={device!r}, operation={operation!r})\n"
+        "held.__enter__()\n"
+        "print('holding', flush=True)\n"
+        "sys.stdin.readline()\n"
+        "held.__exit__(None, None, None)\n"
+    )
+    process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+        [sys.executable, "-c", code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None and process.stdin is not None
+    assert process.stdout.readline().strip() == "holding"
+    try:
+        yield
+    finally:
+        process.stdin.write("\n")
+        process.stdin.flush()
+        process.wait(timeout=60)
+
+
+def test_a_build_refuses_while_another_run_works_in_the_directory(tmp_path, capsys) -> None:
+    """One build directory, one operation at a time (PO 2026-08-16).
+
+    Nothing is stubbed for this one: the refusal has to land *before*
+    anything touches the directory, which is what makes it a guard
+    rather than a report.
+    """
+    with _build_dir_held_elsewhere(tmp_path, device="bmp180-node", operation="flash"):
+        code = main(["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)])
+    assert code == 1
+    error = capsys.readouterr().err
+    assert "bmp180-node is being flashed" in error
+    assert str(os.getpid()) not in error  # the holder's process, not ours
+
+
+def test_signing_refuses_while_a_build_is_running_in_the_directory(tmp_path, capsys) -> None:
+    """The collision that would sign an image somebody is still writing."""
+    (tmp_path / "build-report.json").write_text("{}", "utf-8")
+    with _build_dir_held_elsewhere(tmp_path, device="bmp180-node", operation="build"):
+        code = main(["device", "sign-firmware", str(tmp_path)])
+    assert code == 1
+    assert "A build of bmp180-node is already running" in capsys.readouterr().err
 
 
 def test_the_footprint_table_drops_the_linker_region_and_keeps_empty_ones() -> None:

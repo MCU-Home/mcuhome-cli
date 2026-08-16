@@ -913,7 +913,33 @@ def _cmd_build(args: argparse.Namespace, output: Output) -> int:
     selection = _select_build(args, settings, project, output)
     method = selection.method
     output.start("build", device=model.device.name, method=method)
+    # The whole command holds the build directory, not just the compile:
+    # generating the tree, collecting the artifacts and signing the image
+    # all write files a second run would be overwriting underneath.
+    with api.build_lock(out_dir, device=model.device.name, operation="build"):
+        return _build_holding_the_directory(
+            args,
+            model,
+            out_dir,
+            project=project,
+            settings=settings,
+            selection=selection,
+            method=method,
+            output=output,
+        )
 
+
+def _build_holding_the_directory(
+    args: argparse.Namespace,
+    model: DeviceModel,
+    out_dir: Path,
+    *,
+    project: api.Project | None,
+    settings: api.Settings,
+    selection: api.SelectedBuilder,
+    method: str,
+    output: Output,
+) -> int:
     # Host-side stage 4 runs for --generate-only (which stops after it) and
     # for local-dev (which compiles the tree it produces). The two
     # container-shaped methods generate *inside* the build container from
@@ -1944,6 +1970,18 @@ def _resolve_sign_target(args: argparse.Namespace) -> tuple[Path, api.Project | 
 
 def _cmd_sign(args: argparse.Namespace, output: Output) -> int:
     target, project = _resolve_sign_target(args)
+    # Signing replaces the application image in a build directory, which
+    # is exactly what a build running there would be rewriting underneath
+    # it — so it holds the directory too, and says what is in the way
+    # when it cannot.
+    directory = target if target.is_dir() else target.parent
+    with api.build_lock(directory, device=directory.name, operation="sign"):
+        return _sign_holding_the_directory(args, target, project, output)
+
+
+def _sign_holding_the_directory(
+    args: argparse.Namespace, target: Path, project: api.Project | None, output: Output
+) -> int:
     # One verb, two report shapes, chosen by which file the directory
     # holds. A local-dev build dir carries build-manifest.json (the manifest
     # path below); a container build dir carries the leaner §7.2.1
@@ -2080,6 +2118,12 @@ def _cmd_schema(args: argparse.Namespace, output: Output) -> int:
 
 
 def _cmd_clean(args: argparse.Namespace, output: Output) -> int:
+    """``mcuhome clean`` — an honest stub (cli ADR 0003).
+
+    Deleting a build directory is the third operation that must hold it
+    (``operation="clean"``): removing files a running build is writing
+    leaves that build failing in ways that name no cause.
+    """
     del args, output
     raise BuildError(
         "mcuhome clean is not implemented yet.",
@@ -2098,6 +2142,15 @@ def _cmd_flash(args: argparse.Namespace, output: Output) -> int:
     plain serial port and accepts DFU. That waits on platform work
     (phase 3: CDC-ACM recovery in our bootloader), so the command
     refuses in words rather than being missing.
+
+    When it stops being a stub it takes the build directory for the
+    duration, like every command that touches one::
+
+        with api.build_lock(out_dir, device=name, operation="flash"):
+
+    A build rewriting ``firmware.signed.hex`` while this reads it would
+    put half of one image and half of another on the device, and neither
+    side could notice.
     """
     del output
     raise BuildError(
@@ -2112,7 +2165,12 @@ def _cmd_flash(args: argparse.Namespace, output: Output) -> int:
 
 
 def _cmd_first_time_setup(args: argparse.Namespace, output: Output) -> int:
-    """``device first-time-setup`` — an honest stub (cli ADR 0003)."""
+    """``device first-time-setup`` — an honest stub (cli ADR 0003).
+
+    Takes the device's build directory when it becomes real, for the
+    reason ``_cmd_flash`` states: it writes what a build may be
+    rewriting.
+    """
     del output
     raise BuildError(
         f"mcuhome device first-time-setup is not implemented yet ({args.device} was not touched).",
