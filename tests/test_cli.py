@@ -15,13 +15,14 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, make_project
-from mcuhome.compiler import container, localbuild, workspace
-from mcuhome.compiler import localbackend as lb
+from mcuhome.compiler import workspace
 from mcuhome.compiler.generate import APP_DIR
 from mcuhome.model import __version__ as model_version
 from mcuhome.model.manifest import MANIFEST_FILE
 from mcuhome.model.model import MODEL_VERSION
-from mcuhome.workbench import api, buildmethods, imgtool, sessionclient, signing
+from mcuhome.workbench import api, buildmethods, containerbuild, imgtool, sessionclient, signing
+from mcuhome.workbench import buildenv as container
+from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.project import Project
 
 from mcuhome_cli import __version__ as cli_version
@@ -57,7 +58,7 @@ def _fake_local_run(model, **kwargs):
 
     Writes the unsigned firmware and the §7.2.1 build report into the
     per-invocation ``out`` the real backend would, and answers a successful
-    :class:`~mcuhome.compiler.localbackend.LocalOutcome`. The private key is
+    :class:`~mcuhome.workbench.orchestrator.LocalOutcome`. The private key is
     deliberately not among the arguments a build ever receives — the whole
     point of the local path — so this fake never sees one either.
     """
@@ -102,7 +103,7 @@ def _fake_local_run(model, **kwargs):
         artifacts=artifacts,
         out=out,
     )
-    return localbuild.LocalBuildResult(
+    return containerbuild.LocalBuildResult(
         outcome=outcome,
         out_dir=out,
         context_dir=work_root / "context",
@@ -122,7 +123,7 @@ def _local_failure(outcome: lb.LocalOutcome) -> buildmethods.BuildOutcome:
         artifacts=(),
         out_dir=None,
         report=imgtool.BUILD_REPORT_FILE,
-        detail=localbuild.LocalBuildResult(
+        detail=containerbuild.LocalBuildResult(
             outcome=outcome, out_dir=Path("."), context_dir=Path("."), image=container.IMAGE
         ),
     )
@@ -691,7 +692,7 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
     """The local path's image-not-found is a typed refusal, not a crash."""
 
     def refuse(model, **kwargs):
-        raise localbuild.lb.BuildError(
+        raise containerbuild.lb.BuildError(
             f"The build container {kwargs['image']} is missing on this host.",
             hint="pull the image, then rerun the build",
         )

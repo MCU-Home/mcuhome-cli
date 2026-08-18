@@ -125,7 +125,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mcuhome.compiler import container, workspace
+from mcuhome.compiler import workspace
 from mcuhome.compiler.generate import write_tree
 from mcuhome.model import __version__ as model_version
 from mcuhome.model import export, ota, pairing, registry
@@ -142,6 +142,7 @@ from mcuhome.workbench import (
     scaffold,
     signing,
 )
+from mcuhome.workbench import buildenv as container
 from mcuhome.workbench.loader import load_yaml_file
 from mcuhome.workbench.project import check_secret_file
 

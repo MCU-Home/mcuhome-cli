@@ -13,8 +13,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mcuhome.compiler import container
-from mcuhome.compiler import localbackend as lb
+from mcuhome.workbench import buildenv as container
+from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.project import init_project
 
 TESTS_DIR = Path(__file__).resolve().parent
