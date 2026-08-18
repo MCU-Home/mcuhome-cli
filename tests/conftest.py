@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 from mcuhome.workbench import buildenv as container
+from mcuhome.workbench import ociregistry
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.project import init_project
 
@@ -139,3 +140,23 @@ def _no_docker(monkeypatch):
 
     monkeypatch.setattr(container, "_run_quiet", refuse)
     monkeypatch.setattr(lb, "_run_command", refuse_docker)
+
+
+@pytest.fixture(autouse=True)
+def _no_registry(monkeypatch):
+    """Nothing in this suite is allowed to reach a container registry.
+
+    Choosing a build environment goes over HTTPS now, so a test that
+    forgot to pin one would otherwise depend on ghcr.io being up and on
+    what is published there today. A build that must resolve one pins a
+    digest and stubs ``docker image inspect``, which is the path an
+    air-gapped user takes too.
+    """
+
+    def refuse(self, url, headers, timeout):
+        del headers, timeout
+        raise AssertionError(
+            f"a test tried to reach {url}: pin the environment with a digest instead"
+        )
+
+    monkeypatch.setattr(ociregistry.Registry, "_urlopen", refuse)

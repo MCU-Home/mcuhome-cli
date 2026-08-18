@@ -1193,8 +1193,13 @@ def _build_local_dev(
 
 
 def _note(label: str, parts: Sequence[str], *, output: Output) -> str:
-    """One step's line: which step, then what it established."""
-    return "  " + output.muted(label.ljust(10)) + output.muted(" · ").join(parts)
+    """One step's line: which step, then what it established.
+
+    The label column is nine wide **plus** a separator, rather than ten
+    flat: a label longer than the column would otherwise run straight
+    into its first fact with nothing between them.
+    """
+    return "  " + output.muted(f"{label:<9} ") + output.muted(" · ").join(parts)
 
 
 def _count(number: int, thing: str) -> str:
@@ -1278,11 +1283,15 @@ def _step_note(stage: str, facts: dict[str, Any], *, output: Output) -> str | No
     does not know is carried by the machine modes and ignored here
     rather than guessed at.
     """
-    if stage != "context" or not facts:
+    if not facts:
+        return None
+    if stage == "environment":
+        return _environment_note(facts, output=output)
+    if stage != "context":
         return None
     # Every value is read defensively: a line that describes the build
     # must never be the thing that ends it.
-    parts = [f"SDK {facts.get('sdk', '?')}", f"Zephyr {facts.get('zephyr', '?')}"]
+    parts = [f"SDK {facts.get('sdk', '?')}"]
     patches = facts.get("patches") or []
     parts.append(f"patches: {', '.join(patches)}" if patches else "no patches")
     if facts.get("files"):
@@ -1293,6 +1302,33 @@ def _step_note(stage: str, facts: dict[str, Any], *, output: Output) -> str | No
         # digits are what a person compares two builds with.
         parts.append(f"id {identity.partition(':')[2][:12]}")
     return _note("context", parts, output=output)
+
+
+def _environment_note(facts: dict[str, Any], *, output: Output) -> str | None:
+    """Which container this build compiles in, and how it was arrived at.
+
+    The one line that makes a moving tag honest: the same configuration
+    can resolve to two images on two days, so what it resolved to *this
+    time* is stated rather than left in a file. ``found under`` names the
+    moving tag the digest came from, which is the difference between
+    "the publisher currently recommends this" and "you asked for it".
+    """
+    reference = str(facts.get("build_environment") or "")
+    if not reference:
+        return None
+    name, _, digest = reference.partition("@")
+    parts = [name] if name else []
+    if digest:
+        parts.append(f"digest {digest.partition(':')[2][:12]}")
+    zephyr = str(facts.get("zephyr") or "")
+    if zephyr:
+        parts.append(f"Zephyr {zephyr}")
+    found_under = str(facts.get("found_under") or "")
+    if found_under and found_under != name.rpartition(":")[2]:
+        parts.append(f"found under {found_under}")
+    if facts.get("fetched"):
+        parts.append("fetched")
+    return _note("build environment", parts, output=output)
 
 
 def _bootloader_public_key(key: signing.SigningKey, out_dir: Path) -> Path:
@@ -1351,7 +1387,6 @@ def _build_delivered(
     signing_pub = _public_pem_for_context(public_key, key)
     jobs, jobs_source = _resolve_jobs(settings)
     remote = method == api.REMOTE
-    reference = "" if remote else container.image_reference(env, override=selection.image)
     server, token = (selection.server, selection.token) if remote else (None, None)
 
     if not output.machine:
@@ -1371,8 +1406,11 @@ def _build_delivered(
             # the lack of an address should not print "server None" first.
             if server:
                 print(f"  {output.muted('server')} {server}")
-        else:
-            print(f"  {output.muted('image')} {reference}")
+        elif selection.image:
+            # Only an override is worth printing here. What a plain build
+            # runs in is decided a moment later, against a registry, and
+            # the build environment step says what it turned out to be.
+            print(f"  {output.muted('image')} {selection.image}")
         print(f"  {output.muted('jobs')} {jobs} {output.muted(f'({jobs_source})')}")
         print(_key_note(key, public_key, output))
         print()
@@ -1385,9 +1423,14 @@ def _build_delivered(
     if remote and where is None:
         where = f"remote {server}" if server else "remote"
     if not remote:
-        where = f"container {reference.rsplit(':', 1)[-1]}"
+        # Not the image tag any more: which container this runs in is
+        # resolved while the build runs, so a label fixed before it starts
+        # would either be a guess or force the resolution to happen twice.
+        # The build environment step states it, once and for good.
+        where = "build container"
     steps = [
         buildview.BuildStep("validate", "validate", state=buildview.DONE),
+        buildview.BuildStep("environment", "build environment"),
         buildview.BuildStep("context", "context"),
         buildview.BuildStep("compile", f"compile ({where})"),
         buildview.BuildStep("artifacts", "artifacts"),
@@ -1434,7 +1477,12 @@ def _build_delivered(
                 jobs=jobs,
                 signing_pub=signing_pub,
                 sdk_sources=settings.value("sdk_sources"),
-                image=None if remote else reference,
+                # The override only. Which environment a build runs in is
+                # the device's own statement, resolved against a registry
+                # while the build runs — so there is nothing to work out
+                # here, and `--container-image` means the same thing on
+                # both methods: pin this one instead.
+                image=selection.image,
                 # Where this machine keeps its compiler cache. Unset
                 # everywhere means the user's cache directory, which is
                 # the answer for everyone who never thinks about it.
@@ -2995,16 +3043,21 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
             record("builders", "warn" if complaints else "ok", detail)
 
     docker = container.docker_program(env)
-    reference = container.image_reference(env)
+    reference = container.environment_reference(env)
     try:
-        container.preflight(docker, reference, env=env)
+        container.preflight(docker, env=env)
     except MCUHomeError as error:
         record("container", "fail", error.message)
     else:
+        # Which image, deliberately not checked here: a build environment
+        # is chosen per device, out of what that device's SDK needs, and
+        # is fetched when it is missing. What a machine-wide check can say
+        # is that a container runtime is there and where environments come
+        # from by default.
         record(
             "container",
             "ok",
-            _("{docker} answers and the image {image} is present").format(
+            _("{docker} answers; build environments come from {image}").format(
                 docker=docker, image=reference
             ),
         )
