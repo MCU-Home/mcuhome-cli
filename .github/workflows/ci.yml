@@ -78,12 +78,12 @@ jobs:
         # model+compiler from mcuhome-sdk/packaging, the workbench from
         # the mcuhome repo root. One invocation, so pip resolves the
         # sibling pins against the copies being installed rather than
-        # against an index. The [local] extra's compiler pin is satisfied
-        # by the sdk copy on the same command line.
+        # against an index. The [generate] extra's compiler pin is
+        # satisfied by the sdk copy on the same command line.
         run: |
           python -m pip install --disable-pip-version-check \
             ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome[remote,local]' \
+            './.deps/mcuhome[remote,generate]' \
             ./.deps/mcuhome-sdk/packaging/compiler
           python -m pip install --disable-pip-version-check -e '.[dev]'
 

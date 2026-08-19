@@ -73,7 +73,6 @@ __all__ = [
     "BuildStep",
     "LiveView",
     "PlainView",
-    "ViewStream",
     "log_tail",
     "make_view",
 ]
@@ -146,42 +145,6 @@ def log_tail(path: Path, lines: int = 25) -> str:
     except OSError:
         return ""
     return "\n".join(text.splitlines()[-lines:])
-
-
-class ViewStream:
-    """A ``TextIO``-shaped adapter feeding a view line by line.
-
-    ``local-dev``'s compiler tees its subprocess output into a stream
-    object in-process (``workspace.run_build``), so anything with
-    ``write``/``flush`` can stand in for the terminal — this hands the
-    lines to the view instead, buffering partial writes until their
-    newline arrives.
-    """
-
-    def __init__(self, view: LiveView | PlainView) -> None:
-        self._view = view
-        self._pending = ""
-        # The buffer is read-modify-write state and the writers may sit
-        # on different threads (a tee thread writing, the driver
-        # flushing at the end) — same reason the view itself locks.
-        self._lock = threading.Lock()
-
-    def write(self, text: str) -> int:
-        lines: list[str] = []
-        with self._lock:
-            self._pending += text
-            while "\n" in self._pending:
-                line, _, self._pending = self._pending.partition("\n")
-                lines.append(line)
-        for line in lines:
-            self._view.line(line)
-        return len(text)
-
-    def flush(self) -> None:
-        with self._lock:
-            rest, self._pending = self._pending, ""
-        if rest:
-            self._view.line(rest)
 
 
 @dataclass

@@ -38,7 +38,7 @@ classifiers = [
 # (cli ADR 0002); its extras pull the compiler for the local build
 # methods and the session client for remote. None of them is published
 # yet — see the README for the dev install.
-dependencies = ["mcuhome-workbench[local,remote]"]
+dependencies = ["mcuhome-workbench[generate,remote]"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]

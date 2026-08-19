@@ -15,11 +15,10 @@ from types import SimpleNamespace
 
 import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, make_project
-from mcuhome.compiler import workspace
 from mcuhome.compiler.generate import APP_DIR
 from mcuhome.model import __version__ as model_version
 from mcuhome.model import buildimage
-from mcuhome.model.manifest import MANIFEST_FILE
+from mcuhome.model import jobs as jobs_module
 from mcuhome.model.model import MODEL_VERSION
 from mcuhome.workbench import api, buildmethods, containerbuild, imgtool, sessionclient, signing
 from mcuhome.workbench import buildenv as container
@@ -128,6 +127,16 @@ def _fake_local_run(model, **kwargs):
     )
 
 
+def _recording_local_run(seen: dict):
+    """:func:`_fake_local_run`, with the arguments it was called with kept."""
+
+    def run(model, **kwargs):
+        seen.update(kwargs)
+        return _fake_local_run(model, **kwargs)
+
+    return run
+
+
 def _local_failure(outcome: lb.LocalOutcome) -> buildmethods.BuildOutcome:
     """The dispatch's answer for a ``local`` build that ran and failed."""
     return buildmethods.BuildOutcome(
@@ -161,52 +170,6 @@ def _fake_imgtool(monkeypatch, tmp_path):
     monkeypatch.setattr(imgtool, "_run", fake_run)
     monkeypatch.setenv(imgtool.IMGTOOL_VAR, str(tmp_path / "imgtool.py"))
     return commands
-
-
-#: A sysbuild build log: one linker report per image, each preceded by the
-#: only line that says whose output follows.
-MEMORY_LOG = """\
-[1/2] Performing build step for 'mcuboot'
-Memory region         Used Size  Region Size  %age Used
-           FLASH:       57344 B        64 KB      87.50%
-             RAM:       29424 B       448 KB       6.41%
-[2/2] Performing build step for 'app'
-Memory region         Used Size  Region Size  %age Used
-           FLASH:      859672 B         1 MB      81.99%
-             RAM:      196296 B       448 KB      42.79%
-        IDT_LIST:          0 GB        32 KB       0.00%
-"""
-
-
-def _planner(out_dir: Path):
-    """A stand-in for plan_build that needs neither west nor a toolchain.
-
-    Only the two things the tests cannot provide are replaced — the
-    workspace and the prerequisite check. The command itself is assembled
-    by the real code, because that is what the tests are looking at.
-    """
-
-    def plan(**kwargs) -> workspace.BuildPlan:
-        app_dir = kwargs["out_dir"] / kwargs["app_subdir"]
-        build_dir = kwargs["out_dir"] / workspace.BUILD_SUBDIR
-        return workspace.BuildPlan(
-            topdir=out_dir,
-            app_dir=app_dir,
-            build_dir=build_dir,
-            command=workspace.west_build_command(
-                app_dir=app_dir,
-                build_dir=build_dir,
-                board=kwargs["board"],
-                snippets=kwargs["snippets"],
-                bootloader_snippets=kwargs.get("bootloader_snippets", ()),
-                signing_key=kwargs.get("signing_key"),
-                detached_signing=kwargs.get("detached_signing", False),
-                jobs=kwargs["jobs"],
-            ),
-            env={},
-        )
-
-    return plan
 
 
 def test_version_reports_the_whole_stack(capsys) -> None:
@@ -279,194 +242,43 @@ def test_unknown_device_exits_one(capsys) -> None:
     assert "no device called" in capsys.readouterr().err
 
 
-def test_build_compiles_what_it_generated(tmp_path, capsys, monkeypatch) -> None:
-    """The whole local-dev command, unsigned build then the host signing step.
-
-    Since E56 local-dev builds unsigned and the host signs afterwards, so
-    the compiler stub leaves no signed file — the imgtool stub produces
-    ``zephyr.signed.*``, exactly as it does for a detached build.
-    """
-    seen: dict[str, object] = {}
-
-    def fake_run(plan, stream=None) -> tuple[int, str]:
-        seen["command"] = plan.command
-        seen["cwd"] = plan.topdir
-        for image in ("mcuboot", APP_DIR):
-            output = plan.build_dir / image / "zephyr"
-            output.mkdir(parents=True)
-            (output / "zephyr.elf").write_text("", "utf-8")
-            (output / "zephyr.hex").write_text(":00000001FF\n", "utf-8")
-            (output / "zephyr.bin").write_bytes(bytes(1024))
-        app_output = plan.build_dir / APP_DIR / "zephyr"
-        app_output.joinpath(".config").write_text(
-            'CONFIG_ROM_START_OFFSET=0x200\nCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.0.0+0"\n',
-            "utf-8",
-        )
-        # Sysbuild's combined hex falls back to the unsigned application; the
-        # build drops it, and no signed file exists until the host signs.
-        (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text("", "utf-8")
-        return 0, MEMORY_LOG
-
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", fake_run)
-    _fake_imgtool(monkeypatch, tmp_path)
-
-    assert (
-        main(
-            [
-                "device",
-                "build",
-                str(EXAMPLE),
-                "--build-dir",
-                str(tmp_path),
-                "--build-mode",
-                "local-dev",
-                "--signing-key",
-                str(_private_key(tmp_path)),
-            ]
-        )
-        == 0
-    )
-    out = capsys.readouterr().out
-    assert "Generated 12 files for bmp180-node" in out
-    assert "app/src/mcuhome_config.c" in out
-    assert "app/sysbuild.conf" in out
-    # The application it generated is the application it built.
-    assert str(tmp_path / "app") in " ".join(seen["command"])  # type: ignore[arg-type]
-    assert "--board nrf7002dk/nrf5340/cpuapp" in " ".join(seen["command"])  # type: ignore[arg-type]
-    # No private key in the west command — the bootloader gets the public
-    # half, the host signing step keeps the private one (E56).
-    assert "-DMCUHOME_DETACHED_SIGNING=y" in " ".join(seen["command"])  # type: ignore[arg-type]
-    assert "Built bmp180-node." in out
-    # Both images, each under its own sysbuild sub-directory, and the
-    # host-signed application next to the raw one.
-    assert "mcuboot (bootloader)  1.0 KiB" in out
-    assert "app (application)  1.0 KiB" in out
-    assert str(tmp_path / "build" / "mcuboot" / "zephyr" / "zephyr.hex") in out
-    assert str(tmp_path / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin") in out
-    # No combined hex: an unsigned build's is dropped, uniform with the
-    # container path, which never has one.
-    assert "merged_nrf7002dk_nrf5340_cpuapp.hex" not in out
-    # The footprint, as one table: whole KiB, whole percent, one row per
-    # image (PO 2026-08-16).
-    assert "Image" in out and "FLASH" in out and "RAM" in out
-    assert "56 /   64 KiB   88%" in out
-    assert "840 / 1024 KiB   82%" in out
-    assert "192 / 448 KiB   43%" in out
-    # And the layout those images were built against, as a table.
-    assert "class A · MCUboot swap-using-offset · staging external-flash" in out
-    assert "image-0    internal  0x014000 – 0x0f8000  912 KiB" in out
-    # The delivery path: a class-A board with Matter gets a Matter OTA file
-    # wrapped around the freshly signed image (ADR 0015 decision 5).
-    assert "Matter OTA image  version 0.1.0, SoftwareVersion 65536" in out
-    ota_file = tmp_path / "bmp180-node-0.1.0.ota"
-    assert ota_file.is_file()
-    manifest = json.loads((tmp_path / "build-manifest.json").read_text(encoding="utf-8"))
-    # E56: no build signs itself — the manifest records the host signature.
-    assert manifest["signing"]["signed_by_the_build"] is False
-    assert manifest["signing"]["signed"] is True
-    assert manifest["ota"]["path"] == "bmp180-node-0.1.0.ota"
-    assert manifest["ota"]["software_version"] == 65536
-    assert manifest["ota"]["size"] == ota_file.stat().st_size
-
-
-def test_build_passes_the_configurations_snippets_and_then_the_extra_ones(
-    tmp_path, monkeypatch
-) -> None:
-    """Per image, because sysbuild would otherwise give them to both.
-
-    ``-S debug-rtt`` collapses into the always-included log transport
-    instead of applying the snippet twice; a new snippet appends.
-    """
-    seen: list[str] = []
-
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(
-        workspace,
-        "run_build",
-        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
-    )
-    # --no-sign isolates the west command from the host signing step, which
-    # is identical for every snippet set: the command carries the snippets
-    # either way.
-    argv = ["device", "build"]
-    argv += [str(EXAMPLE), "--build-dir", str(tmp_path), "--build-mode", "local-dev"]
-    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
-    argv += ["-S", "debug-rtt", "-S", "thread-sed"]
-    assert main(argv) == 0
-    assert "--snippet" not in seen
-    assert f"-D{APP_DIR}_SNIPPET=debug-rtt;matter;boot-mode;thread-sed" in seen
-    assert "-Dmcuboot_SNIPPET=boot-mode" in seen
-
-
-def test_a_relative_build_dir_still_names_an_absolute_application(tmp_path, monkeypatch) -> None:
-    """The build runs from the workspace top, not from the user's cwd."""
-    seen: list[str] = []
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(
-        workspace,
-        "run_build",
-        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
-    )
-    argv = ["device", "build", str(EXAMPLE), "--build-dir", "out", "--build-mode", "local-dev"]
-    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
-    assert main(argv) == 0
-    assert str((tmp_path / "out" / APP_DIR).resolve()) in seen
-
-
 def test_build_uses_the_jobs_flag_and_reports_its_source(tmp_path, capsys, monkeypatch) -> None:
-    seen: list[str] = []
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(
-        workspace,
-        "run_build",
-        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
-    )
-    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
-    argv += ["--build-mode", "local-dev", "--jobs", "3"]
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
+    _fake_imgtool(monkeypatch, tmp_path)
+    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--jobs", "3"]
     argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
-    assert "-o=-j3" in seen
+    assert seen["jobs"] == 3
     assert "jobs 3 (arguments)" in capsys.readouterr().out
 
 
 def test_build_uses_the_environment_variable_when_no_flag_is_given(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    seen: list[str] = []
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(
-        workspace,
-        "run_build",
-        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
-    )
-    monkeypatch.setenv(workspace.JOBS_VAR, "5")
-    argv = ["device", "build"]
-    argv += [str(EXAMPLE), "--build-dir", str(tmp_path), "--build-mode", "local-dev"]
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
+    _fake_imgtool(monkeypatch, tmp_path)
+    monkeypatch.setenv(jobs_module.JOBS_VAR, "5")
+    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
     argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
-    assert "-o=-j5" in seen
+    assert seen["jobs"] == 5
     assert "jobs 5 (environment)" in capsys.readouterr().out
 
 
 def test_build_auto_detects_when_neither_flag_nor_environment_is_given(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    seen: list[str] = []
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(
-        workspace,
-        "run_build",
-        lambda plan, stream=None: (seen.extend(plan.command), (0, ""))[1],
-    )
-    monkeypatch.delenv(workspace.JOBS_VAR, raising=False)
-    monkeypatch.setattr(workspace, "detect_jobs", lambda: 7)
-    argv = ["device", "build"]
-    argv += [str(EXAMPLE), "--build-dir", str(tmp_path), "--build-mode", "local-dev"]
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
+    _fake_imgtool(monkeypatch, tmp_path)
+    monkeypatch.delenv(jobs_module.JOBS_VAR, raising=False)
+    monkeypatch.setattr(jobs_module, "detect_jobs", lambda: 7)
+    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
     argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
     assert main(argv) == 0
-    assert "-o=-j7" in seen
+    assert seen["jobs"] == 7
     assert "jobs 7 (auto)" in capsys.readouterr().out
 
 
@@ -484,33 +296,6 @@ def test_jobs_garbage_is_a_plain_language_refusal(capsys) -> None:
     assert "whole number of parallel build jobs" in capsys.readouterr().err
 
 
-def test_build_reports_a_failed_compile_and_points_at_the_build_directory(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", lambda plan, stream=None: (2, "boom\n"))
-    assert (
-        main(
-            [
-                "device",
-                "build",
-                str(EXAMPLE),
-                "--build-dir",
-                str(tmp_path),
-                "--build-mode",
-                "local-dev",
-                "--signing-key",
-                str(_private_key(tmp_path)),
-            ]
-        )
-        == 1
-    )
-    err = capsys.readouterr().err
-    assert "The firmware did not compile (west build exited with 2)." in err
-    assert str(tmp_path / "build") in err
-    assert "Traceback" not in err
-
-
 def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     tmp_path, capsys, monkeypatch
 ) -> None:
@@ -521,9 +306,6 @@ def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     flashable image, with the private key never in a container.
     """
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
-    monkeypatch.setattr(
-        workspace, "plan_build", lambda **kwargs: pytest.fail("the local-dev path ran by default")
-    )
     commands = _fake_imgtool(monkeypatch, tmp_path)
 
     assert (
@@ -1005,9 +787,8 @@ def test_a_refusal_before_the_tree_is_resolved_is_still_json(capsys) -> None:
     assert document["errors"][0]["kind"] == "ConfigError"
 
 
-def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
+def test_build_json_mirrors_the_delivery(tmp_path, capsys, monkeypatch) -> None:
+    monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     _fake_imgtool(monkeypatch, tmp_path)
 
     argv = [
@@ -1016,8 +797,6 @@ def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
         str(EXAMPLE),
         "--build-dir",
         str(tmp_path),
-        "--build-mode",
-        "local-dev",
         "-o",
         "json",
         "--signing-key",
@@ -1027,74 +806,25 @@ def test_build_json_mirrors_the_manifest(tmp_path, capsys, monkeypatch) -> None:
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
     assert document["device"] == "bmp180-node"
-    # E56: no build signs itself, and the host step then signs it — so the
-    # manifest the document mirrors says "not signed by the build" and yet
-    # "signed".
-    assert document["manifest"]["signing"]["signed_by_the_build"] is False
-    assert document["manifest"]["signing"]["signed"] is True
-    assert json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8")) == document["manifest"]
+    assert document["signed"] is True
+    # The §7.2.1 report the build environment delivered, verbatim, and the
+    # artifacts beside it under the roles it declared.
+    assert document["report"]["signing"]["arguments"]["slot-size"] == 912 * 1024
+    assert {entry["role"] for entry in document["artifacts"]} == {
+        "firmware",
+        "bootloader",
+        "report",
+    }
+    assert document["signed_artifacts"]
 
 
-def test_generate_only_json_says_there_is_no_manifest(tmp_path, capsys) -> None:
+def test_generate_only_json_names_what_it_wrote(tmp_path, capsys) -> None:
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
     argv += ["--generate-only", "-o", "json"]
     assert main(argv) == 0
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
-    assert document["manifest"] is None
     assert f"{APP_DIR}/prj.conf" in document["generated"]
-
-
-# --------------------------------------------------------------------------
-# The build manifest lands in the build directory
-# --------------------------------------------------------------------------
-
-
-def _fake_build_run(plan, stream=None) -> tuple[int, str]:
-    """Stage 5 without a compiler: the files a real build leaves behind."""
-    for image in ("mcuboot", APP_DIR):
-        output = plan.build_dir / image / "zephyr"
-        output.mkdir(parents=True, exist_ok=True)
-        (output / "zephyr.elf").write_bytes(b"\x7fELF")
-        (output / "zephyr.hex").write_text(":00000001FF\n", "utf-8")
-        (output / "zephyr.bin").write_bytes(bytes(1024))
-    app_output = plan.build_dir / APP_DIR / "zephyr"
-    app_output.joinpath(".config").write_text(
-        'CONFIG_ROM_START_OFFSET=0x200\nCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION="0.0.0+0"\n', "utf-8"
-    )
-    if "-DMCUHOME_DETACHED_SIGNING=y" not in plan.command:
-        app_output.joinpath("zephyr.signed.bin").write_bytes(bytes(1600))
-        app_output.joinpath("zephyr.signed.hex").write_text(":00000001FF\n", "utf-8")
-    (plan.build_dir / "merged_nrf7002dk_nrf5340_cpuapp.hex").write_text(":00000001FF\n", "utf-8")
-    return 0, MEMORY_LOG
-
-
-def test_a_build_writes_its_manifest(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
-    _fake_imgtool(monkeypatch, tmp_path)
-
-    assert (
-        main(
-            [
-                "device",
-                "build",
-                str(EXAMPLE),
-                "--build-dir",
-                str(tmp_path),
-                "--build-mode",
-                "local-dev",
-                "--signing-key",
-                str(_private_key(tmp_path)),
-            ]
-        )
-        == 0
-    )
-    assert str(tmp_path / MANIFEST_FILE) in capsys.readouterr().out
-    document = json.loads((tmp_path / MANIFEST_FILE).read_text("utf-8"))
-    assert document["device"]["name"] == "bmp180-node"
-    assert document["build"]["snippets"] == ["debug-rtt", "matter", "boot-mode"]
-    assert document["signing"]["arguments"]["slot-size"] == 912 * 1024
 
 
 # --------------------------------------------------------------------------
@@ -1154,137 +884,6 @@ def test_no_sign_refuses_a_private_key_as_the_public_one(tmp_path, capsys) -> No
         == 2
     )
     assert "is a private key" in capsys.readouterr().err
-
-
-def test_no_sign_builds_unsigned_and_says_what_is_next(tmp_path, capsys, monkeypatch) -> None:
-    out_dir = tmp_path / "out"
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
-
-    assert (
-        main(
-            [
-                "device",
-                "build",
-                str(EXAMPLE),
-                "--build-dir",
-                str(out_dir),
-                "--build-mode",
-                "local-dev",
-                "--no-sign",
-                "--public-key",
-                str(_public_key(tmp_path)),
-            ]
-        )
-        == 0
-    )
-    out = capsys.readouterr().out
-    assert "public key" in out
-    assert f"mcuhome device sign-firmware {out_dir}" in out
-
-    document = json.loads((out_dir / MANIFEST_FILE).read_text("utf-8"))
-    assert document["signing"]["signed_by_the_build"] is False
-    assert document["signing"]["signed"] is False
-    assert document["signing"]["arguments"]["header-size"] == 512
-    # Nothing in the directory may look bootable: no signed image, and no
-    # combined hex, which sysbuild fills with the *unsigned* application.
-    assert not (out_dir / "build" / APP_DIR / "zephyr" / "zephyr.signed.bin").exists()
-    assert not list((out_dir / "build").glob(workspace.MERGED_IMAGE_GLOB))
-    assert document["merged"] is None
-    # And no .ota either: it wraps the SIGNED image. What the manifest does
-    # carry is the parameters, which is what lets `mcuhome sign` write one
-    # on a machine that has no device configuration (ADR 0015 decision 8).
-    assert document["ota"]["path"] is None
-    assert document["ota"]["version"] == "0.1.0"
-    assert not list(out_dir.glob("*.ota"))
-
-
-def test_the_detached_build_command_carries_the_public_key(tmp_path, monkeypatch) -> None:
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-
-    def capture(plan, stream=None):
-        seen["command"] = plan.command
-        return _fake_build_run(plan, stream)
-
-    monkeypatch.setattr(workspace, "run_build", capture)
-    public = _public_key(tmp_path)
-    main(
-        [
-            "device",
-            "build",
-            str(EXAMPLE),
-            "--build-dir",
-            str(tmp_path / "out"),
-            "--build-mode",
-            "local-dev",
-            "--no-sign",
-            "--public-key",
-            str(public),
-        ]
-    )
-    command = seen["command"]
-    assert f'-D{workspace.SIGNING_KEY_OPTION}="{public}"' in command
-    assert "-DMCUHOME_DETACHED_SIGNING=y" in command
-
-
-def test_sign_applies_the_manifests_parameters(tmp_path, capsys, monkeypatch) -> None:
-    out_dir = tmp_path / "out"
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
-    main(
-        [
-            "device",
-            "build",
-            str(EXAMPLE),
-            "--build-dir",
-            str(out_dir),
-            "--build-mode",
-            "local-dev",
-            "--no-sign",
-            "--public-key",
-            str(_public_key(tmp_path)),
-        ]
-    )
-    capsys.readouterr()
-
-    commands: list[list[str]] = []
-
-    def fake_imgtool(command: list[str]) -> tuple[int, str]:
-        commands.append(command)
-        Path(command[-1]).write_bytes(b"signed")
-        return 0, ""
-
-    monkeypatch.setattr(imgtool, "_run", fake_imgtool)
-    # Discovery would refuse on machines without a west workspace or an
-    # installed imgtool; the override names a script that never runs,
-    # because _run — the only thing that would run it — is replaced.
-    monkeypatch.setenv(imgtool.IMGTOOL_VAR, str(tmp_path / "imgtool.py"))
-    argv_ = ["device", "sign-firmware"]
-    argv_ += [str(out_dir), "--signing-key", str(tmp_path / "signing.key")]
-    assert main(argv_) == 0
-
-    out = capsys.readouterr().out
-    assert "Signed the application image" in out
-    assert len(commands) == 2  # one per artifact format
-    for command in commands:
-        assert command[command.index("--slot-size") + 1] == str(912 * 1024)
-        assert command[command.index("--header-size") + 1] == "512"
-        assert command[command.index("--align") + 1] == "4"
-
-    document = json.loads((out_dir / MANIFEST_FILE).read_text("utf-8"))
-    assert document["signing"]["signed"] is True
-    assert document["signing"]["signed_by_the_build"] is False
-    application = next(image for image in document["images"] if image["name"] == APP_DIR)
-    assert any(entry["path"].endswith("zephyr.signed.bin") for entry in application["files"])
-
-    # The delivery path closes here rather than at build time: the .ota is
-    # written where the key is, wrapping the image that was just signed.
-    assert "Matter OTA image  version 0.1.0" in out
-    ota_file = out_dir / "bmp180-node-0.1.0.ota"
-    assert ota_file.is_file()
-    assert document["ota"]["path"] == "bmp180-node-0.1.0.ota"
-    assert document["ota"]["size"] == ota_file.stat().st_size
 
 
 # --------------------------------------------------------------------------
@@ -1412,10 +1011,7 @@ def test_sign_reads_a_build_report_directory(tmp_path, capsys, monkeypatch) -> N
         ]
     )
     capsys.readouterr()
-    # A build-report directory holds no build-manifest.json — the report
-    # shape is the one chosen.
     assert (out_dir / "build-report.json").is_file()
-    assert not (out_dir / MANIFEST_FILE).exists()
 
     commands = _fake_imgtool(monkeypatch, tmp_path)
     key = tmp_path / "signing.key"
@@ -1433,43 +1029,14 @@ def test_sign_reads_a_build_report_directory(tmp_path, capsys, monkeypatch) -> N
         assert command[command.index("--align") + 1] == "4"
 
 
-def test_sign_chooses_the_report_shape_by_which_file_is_present(tmp_path) -> None:
-    """One verb, two report shapes: build-manifest wins, else build-report."""
-    manifest_dir = tmp_path / "local-dev"
-    manifest_dir.mkdir()
-    (manifest_dir / MANIFEST_FILE).write_text("{}", "utf-8")
-    assert cli._target_is_build_report(manifest_dir) is False
-
-    report_dir = tmp_path / "container"
-    report_dir.mkdir()
-    (report_dir / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(REPORT), "utf-8")
-    assert cli._target_is_build_report(report_dir) is True
-
-    # A directory that carries both keeps the richer manifest path.
-    both = tmp_path / "both"
-    both.mkdir()
-    (both / MANIFEST_FILE).write_text("{}", "utf-8")
-    (both / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(REPORT), "utf-8")
-    assert cli._target_is_build_report(both) is False
-
-    # The report file named directly is unambiguous.
-    assert cli._target_is_build_report(report_dir / imgtool.BUILD_REPORT_FILE) is True
-    assert cli._target_is_build_report(manifest_dir / MANIFEST_FILE) is False
-
-
 def test_sign_on_a_directory_with_no_build_output_is_a_clean_refusal(tmp_path, capsys) -> None:
-    """`mcuhome sign` on a directory holding neither a manifest nor a report refuses cleanly.
-
-    Neither file present means the manifest path is taken (a manifest would
-    win if it existed), so the refusal is the missing build-manifest.json —
-    a typed message, not a traceback.
-    """
+    """A directory that holds no build report refuses cleanly, by name."""
     key = _private_key(tmp_path)
     empty = tmp_path / "empty"
     empty.mkdir()
     assert main(["device", "sign-firmware", str(empty), "--signing-key", str(key)]) == 1
     err = capsys.readouterr().err
-    assert MANIFEST_FILE in err
+    assert imgtool.BUILD_REPORT_FILE in err
     assert "Traceback" not in err
 
 
@@ -1822,7 +1389,6 @@ def test_a_failed_container_build_quotes_the_programs_own_account():
     # The hint names where the build ran as a complete phrase, not as a
     # noun the branch below it has to finish.
     assert "the build ran in the MCUHome build container." in (failure.hint or "")
-    assert "--build-mode local-dev compiles on the host instead" in (failure.hint or "")
 
 
 def test_a_failed_container_build_without_a_document_stays_terse():
@@ -1885,7 +1451,6 @@ def _selection_args(**overrides) -> argparse.Namespace:
         "builder": None,
         "build_server": None,
         "build_token": None,
-        "workspace": None,
         "container_image": None,
     }
     values.update(overrides)
@@ -1912,23 +1477,21 @@ def test_the_manual_rung_carries_the_mode_flags_verbatim(tmp_path) -> None:
     assert selection.method == buildmethods.REMOTE
     assert (selection.server, selection.token) == ("10.0.0.5:8291", "t")
     assert selection.builder is None
-    dev = cli._select_build(
-        _selection_args(build_mode="local-dev", workspace=tmp_path / "ws"),
+    local = cli._select_build(
+        _selection_args(build_mode="local", container_image="ghcr.io/x:y"),
         settings,
         None,
         Output(),
     )
-    assert dev.method == buildmethods.LOCAL_DEV
-    assert dev.workspace == (tmp_path / "ws").resolve()
+    assert local.method == buildmethods.LOCAL
+    assert local.image == "ghcr.io/x:y"
 
 
 def test_native_is_gone_and_is_now_an_unknown_argument(tmp_path, capsys) -> None:
-    """E62: ``--build-mode local-dev`` is the only spelling of the host method.
+    """E62: the ``--native`` alias is absent, not deprecated.
 
-    The alias is not deprecated, it is absent — argparse refuses it as an
-    unknown argument with exit code 2, the same as any typo. The project
-    is not public, so no invocation outside these repositories can have
-    depended on it.
+    argparse refuses it as an unknown argument with exit code 2, the same
+    as any typo.
     """
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--native"]
     with pytest.raises(SystemExit) as caught:
@@ -1938,7 +1501,7 @@ def test_native_is_gone_and_is_now_an_unknown_argument(tmp_path, capsys) -> None
 
 
 def test_an_unknown_mode_is_an_argparse_refusal(tmp_path, capsys) -> None:
-    """--build-mode has exactly three values; a typo is a usage error, exit 2."""
+    """--build-mode has exactly the methods there are; a typo is exit 2."""
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--build-mode", "cloud"]
     with pytest.raises(SystemExit) as caught:
         main(argv)
@@ -1961,9 +1524,8 @@ def _no_build_may_start(monkeypatch) -> None:
         (["--builder", "attic", "--build-mode", "local"], "one or the other"),
         (["--build-server", "10.0.0.5"], "needs --build-mode remote"),
         (["--build-token", "t"], "needs --build-mode remote"),
-        (["--workspace", "/ws"], "needs --build-mode local-dev"),
         (["--container-image", "ref"], "needs --build-mode local"),
-        (["--build-mode", "remote", "--workspace", "/ws"], "--build-mode local-dev flag"),
+        (["--build-mode", "remote", "--container-image", "ref"], "--build-mode local flag"),
         (["--build-mode", "remote"], "needs --build-server"),
         (["--build-mode", "local", "--build-server", "x"], "--build-mode remote flag"),
     ],
@@ -2243,23 +1805,21 @@ def _capture_signing(monkeypatch) -> list[dict]:
 
     def record(model, out_dir, *, key, env, report, project=None):
         calls.append({"device": model.device.name, "out_dir": out_dir, "report": report})
-        return cli._Signed(signed=[], ota=None, manifest=None)
+        return cli._Signed(signed=[], ota=None)
 
     monkeypatch.setattr(cli, "_sign_after_build", record)
     return calls
 
 
 def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch) -> None:
-    """E56: one host-side signing step, reached identically by all three.
+    """E56: one host-side signing step, reached identically by both.
 
-    Each method is stubbed at its own backend seam — the west build for
-    ``local-dev``, ``compose_local_build`` for ``local``, and the dispatch
-    itself for ``remote``, whose real composition (a session against a
-    build server) is tested in the library's own suite. What is asserted
-    is the same thing for all three: the signing step ran exactly once, on
-    the build directory, for this device — and the only value that
-    differs is the *name of the report* it was told to read, which is
-    E55's "both shapes" rule and not a second code path.
+    Each method is stubbed at its own backend seam — ``compose_local_build``
+    for ``local`` and the dispatch itself for ``remote``, whose real
+    composition (a session against a build server) is tested in the
+    library's own suite. What is asserted is the same thing for both: the
+    signing step ran exactly once, on the build directory, for this
+    device, over the report the build named.
 
     The ``remote`` leg also carries an ``--sdk-source``, because since E65
     it needs one for the same reason ``local`` does: it creates its own
@@ -2268,15 +1828,6 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     """
     calls = _capture_signing(monkeypatch)
     requests: list[buildmethods.BuildRequest] = []
-
-    # local-dev, through the real dispatch onto a stubbed west build.
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
-    local_dev_dir = tmp_path / "local-dev"
-    argv = ["device", "build"]
-    argv += [str(EXAMPLE), "--build-dir", str(local_dev_dir), "--build-mode", "local-dev"]
-    argv += ["--signing-key", str(_private_key(tmp_path))]
-    assert main(argv) == 0
 
     # local, through the real dispatch onto a stubbed container backend.
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
@@ -2346,17 +1897,9 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     assert [request.server for request in requests] == ["ws://build.example/ws"]
     assert requests[0].sdk_sources == (sdk_source,)
 
-    assert [call["device"] for call in calls] == ["bmp180-node"] * 3
-    assert [call["out_dir"] for call in calls] == [
-        local_dev_dir.resolve(),
-        local_dir.resolve(),
-        remote_dir.resolve(),
-    ]
-    assert [call["report"] for call in calls] == [
-        MANIFEST_FILE,
-        imgtool.BUILD_REPORT_FILE,
-        imgtool.BUILD_REPORT_FILE,
-    ]
+    assert [call["device"] for call in calls] == ["bmp180-node"] * 2
+    assert [call["out_dir"] for call in calls] == [local_dir.resolve(), remote_dir.resolve()]
+    assert [call["report"] for call in calls] == [imgtool.BUILD_REPORT_FILE] * 2
 
 
 def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeypatch) -> None:
@@ -2364,10 +1907,8 @@ def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeyp
     calls = _capture_signing(monkeypatch)
     public = _public_key(tmp_path)
 
-    monkeypatch.setattr(workspace, "plan_build", _planner(tmp_path))
-    monkeypatch.setattr(workspace, "run_build", _fake_build_run)
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
-    for extra in (["--build-mode", "local-dev"], []):
+    for extra in (["--build-mode", "local"], []):
         argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path / "out")]
         argv += ["--no-sign", "--public-key", str(public), *extra]
         assert main(argv) == 0
@@ -2375,7 +1916,7 @@ def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeyp
     assert calls == []
 
 
-def test_the_build_help_advertises_the_three_methods(capsys) -> None:
+def test_the_build_help_advertises_the_methods(capsys) -> None:
     """The command surface is the one machine-facing promise this package makes."""
     assert main(["device", "build", "--help"]) == 0
     out = capsys.readouterr().out

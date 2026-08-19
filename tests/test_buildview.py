@@ -22,7 +22,6 @@ from mcuhome_cli.buildview import (
     BuildStep,
     LiveView,
     PlainView,
-    ViewStream,
     log_tail,
     make_view,
 )
@@ -231,19 +230,8 @@ def test_under_a_machine_mode_lines_go_to_stderr(tmp_path, capsys) -> None:
 
 
 # --------------------------------------------------------------------------
-# The stream adapter, and the tail
+# The tail
 # --------------------------------------------------------------------------
-
-
-def test_the_stream_adapter_reassembles_lines(tmp_path) -> None:
-    view, _stream = _live(tmp_path)
-    adapter = ViewStream(view)
-    adapter.write("first ha")
-    adapter.write("lf\nsecond\nthird without newline")
-    adapter.flush()
-    view.close(success=True)
-    kept = (tmp_path / "build.log").read_text("utf-8").splitlines()
-    assert kept == ["first half", "second", "third without newline"]
 
 
 def test_the_tail_is_the_last_lines_of_the_file(tmp_path) -> None:

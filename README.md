@@ -81,7 +81,7 @@ mcuhome device build <device> --build-mode remote \
 # mcuhome.yaml (or the user/system configuration.yaml)
 builders:
   - name: attic
-    type: remote            # local | local-dev | remote
+    type: remote            # local | remote
     server: wss://build.lan:8443/session
 default_builder: attic
 ```
@@ -93,7 +93,7 @@ committed configuration names servers and never carries a credential.
 ## Development install
 
 Nothing is on PyPI yet, so the `mcuhome-workbench` dependency and the
-SDK distributions behind its `local` extra come from sibling checkouts
+SDK distributions behind it come from sibling checkouts
 (ADR 0024 split: [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)
 carries the workbench,
 [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) the
@@ -105,7 +105,7 @@ the copies being installed:
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ../mcuhome-sdk/packaging/model \
             -e ../mcuhome-sdk/packaging/compiler \
-            -e '../mcuhome[remote,local]'
+            -e '../mcuhome[remote,generate]'
 pip install -e '.[dev]'
 ```
 
@@ -118,7 +118,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install \
   "mcuhome-model @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/model" \
   "mcuhome-compiler @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/compiler" \
-  "mcuhome-workbench[remote,local] @ git+https://github.com/mcu-home/mcuhome" \
+  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome" \
   -e '.[dev]'
 ```
 

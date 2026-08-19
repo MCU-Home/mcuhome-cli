@@ -293,8 +293,6 @@ def test_sign_firmware_on_an_unrelated_directory_names_what_it_expected(
     empty.mkdir()
     assert main(["device", "sign-firmware", str(empty)]) == 1
     err = capsys.readouterr().err
-    assert "neither" in err
-    assert "build-manifest.json" in err
     assert "build-report.json" in err
 
 
