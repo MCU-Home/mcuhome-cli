@@ -15,7 +15,7 @@ name = "mcuhome-cli"
 version = "0.1.0.dev0"
 description = "The mcuhome command line: a thin shell over the MCUHome builder library."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 license = "Apache-2.0"
 authors = [{ name = "The MCUHome Contributors" }]
 keywords = [
@@ -57,10 +57,10 @@ only-include = ["mcuhome/cli"]
 # (CI, currently 0.16.1) together with mcuhome's.
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/python"]

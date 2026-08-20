@@ -105,7 +105,7 @@ the copies being installed:
 python3 -m venv .venv && . .venv/bin/activate
 pip install -e ../mcuhome-sdk/packaging/model \
             -e ../mcuhome-sdk/packaging/compiler \
-            -e '../mcuhome[remote,generate]'
+            -e '../mcuhome-workbench[remote,generate]'
 pip install -e '.[dev]'
 ```
 

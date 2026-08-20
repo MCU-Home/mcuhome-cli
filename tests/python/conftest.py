@@ -4,7 +4,7 @@
 
 The example configuration and the fixture tree are copies of the ones in
 the mcuhome-sdk repository (``docs/design/examples/`` and
-``tests_py/data/tree/``): the CLI tests exercise the command surface over
+``tests/python/data/tree/``): the CLI tests exercise the command surface over
 a real configuration without reaching into the SDK repo's checkout.
 """
 
