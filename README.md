@@ -1,139 +1,96 @@
-<!--
-SPDX-FileCopyrightText: 2026 The MCUHome Contributors
-SPDX-License-Identifier: Apache-2.0
--->
+# mcuhome-cli
 
-# mcuhome
+`mcuhome-cli` is the command line of MCUHome — the `mcuhome` program. It is
+the thin shell over the workbench library: it parses arguments, renders
+output and reads the process environment, while every build, validation and
+signing step it invokes lives in the library.
 
-The `mcuhome` command line — a thin shell over the
-[MCUHome library family](https://github.com/mcu-home/mcuhome-workbench). The
-distribution is `mcuhome-cli` (`pip install mcuhome-cli`), and it is
-what puts the `mcuhome` command on PATH; the library ships as
-`mcuhome-model`, `mcuhome-workbench` and `mcuhome-compiler`.
+## What this repository holds
 
-It parses arguments and renders results; every stage of the actual
-pipeline (validate, generate, compile, sign) is a call into the
-library. Programs never use this shell: they embed
-`mcuhome.workbench.api`, the supported programmatic surface.
+- The `mcuhome` console script and its parser: projects, devices, builds,
+  signing, configuration and diagnostics.
+- Three output modes behind one `-o/--output` flag — human, JSON and NDJSON —
+  so one command serves a person and a program.
+- A live build view: a step line naming where each step runs, a repainted
+  window on the build log, and the full log in a file.
+- The phase contract that turns a library refusal into an exit code, a hint
+  and a documentation link.
+- Message externalization (gettext) for every string a person reads, with
+  machine output deliberately outside it.
 
-```
-mcuhome project init       [dir]         # create a project directory
-mcuhome project info       [dir]         # where, which id, which version
-mcuhome project upgrade    [dir]         # migrate it to the current layout
-mcuhome config             [print|get|set|unset]  # read/write configuration values
-mcuhome device new         <device>      # scaffold a device folder
-mcuhome device validate    <device>      # stages 1-3, prints a summary
-mcuhome device build       <device>      # stages 1-5, a flashable image
-mcuhome device sign-firmware <device|path>   # apply the signature afterwards
-mcuhome device matter-pairing <device>  # show this device's commissioning codes
-mcuhome device matter-pairing --new <device>  # draw fresh commissioning credentials
-mcuhome device list                     # list project devices with status
-mcuhome public-key                      # the public half of the signing key
-mcuhome schema             [config|registry]  # the schema and the registry, as JSON
-mcuhome doctor                          # environment diagnosis
-mcuhome device flash       <device>      # flash the last built/signed firmware (stub)
-mcuhome device first-time-setup <device> # one-time board provisioning (stub)
-mcuhome clean              <device|--all> # remove build output (stub)
-```
+## Using it
 
-Commands run inside an MCUHome **project directory** (ADR 0022): a
-directory `mcuhome project init` created, found like a git checkout by
-searching upward, or named explicitly (`--project-dir`,
-`MCUHOME_PROJECT_DIR`). Its `.mcuhome-project-root` file states the
-project's layout version and a unique project id; MCUHome maintains it
-and it is not meant to be edited. When a release moves past that
-layout, every command says so and `mcuhome project upgrade` migrates
-the project — after a backup, and after a confirmation you type. Devices live in `devices/<name>/main.yaml`,
-secrets under `secrets/` (mode 700, kept out of git by the generated
-`.gitignore`), and the firmware signing key is per-project —
-`secrets/firmware/mcuboot.yaml`, generated on first need
-(`--signing-key`/`MCUHOME_SIGNING_KEY` override it with a plain PEM
-file). Options like `--sdk-sources` and `--jobs` resolve through the
-five configuration layers of ADR 0022 (defaults, system, user,
-project, environment, command line), each value knowing where it came
-from — `mcuhome config print` shows the resolved tree.
-
-`-o json` emits one machine-readable document on stdout after the run;
-`-o json-stream` emits NDJSON as the run progresses (verbs `start`,
-`progress`, `error`, `result` — the vocabulary is append-only, so
-consumers ignore verbs they do not know). Exit codes are the same in
-every mode — 0 success, 1 the operation failed, 2 usage error — the
-build log goes to stderr, and both machine forms are non-interactive.
-`--color auto|always|never` follows the `NO_COLOR` convention.
-`mcuhome --version` reports the whole stack, one line per part.
-
-## Build servers and builders
-
-Where a build runs is a **builder** (ADR 0023): configuration about a
-build method, declared once in any configuration layer and selected
-per invocation — the configured `default_builder`, an explicit
-`--builder NAME`, or the fully manual `--build-mode` rung that
-bypasses the list for a one-off build:
+The distribution installs one console script, `mcuhome`, which works on a
+project directory — create one, scaffold a device in it, and build that
+device:
 
 ```sh
-mcuhome device build <device>                   # the configured default builder
-mcuhome device build <device> --builder attic   # a named builder
-mcuhome device build <device> --build-mode remote \
-  --build-server wss://host:8443/session --build-token <token>
+mcuhome project init my-project
+cd my-project
+mcuhome device new my-device --board nrf7002dk/nrf5340/cpuapp
+mcuhome device build my-device
 ```
 
-```yaml
-# mcuhome.yaml (or the user/system configuration.yaml)
-builders:
-  - name: attic
-    type: remote            # local | remote
-    server: wss://build.lan:8443/session
-default_builder: attic
-```
+Every command answers `--help`, and `-o json` / `-o json-stream` hand a
+driving process the same information as a document instead of a rendering.
 
-A remote builder's bearer token lives next to the other secrets, in
-`secrets/build-server/<name>.yaml` (`token: …`, owner-only) — the
-committed configuration names servers and never carries a credential.
+## How it fits into MCUHome
 
-## Development install
+This package declares one dependency,
+[mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench), which
+resolves the device model and runs the build and the signature. A `local`
+build compiles in a build environment on this machine, built from
+[mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) together with the C
+runtime it compiles against; a `remote` build hands the context to a server
+from
+[mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver).
+[mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) offers the same
+operations in a browser, over the same workbench API.
 
-Nothing is on PyPI yet, so the `mcuhome-workbench` dependency and the
-SDK distributions behind it come from sibling checkouts
-(ADR 0024 split: [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)
-carries the workbench,
-[mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) the
-model and the compiler). From this repository's root, with both cloned
-next to it — one invocation, so pip resolves the sibling pins against
-the copies being installed:
+## Working on this repository
+
+The repository needs Python 3.13 and its own virtual environment. Install
+the workbench, plus the model and compiler packages, from their checkouts,
+then this package with its `dev` extra, and run the suite in `tests/python`:
 
 ```sh
-python3 -m venv .venv && . .venv/bin/activate
-pip install -e ../mcuhome-sdk/packaging/model \
-            -e ../mcuhome-sdk/packaging/compiler \
-            -e '../mcuhome-workbench[remote,generate]'
 pip install -e '.[dev]'
+pytest
 ```
 
-Working on this repository alone — no sibling checkouts — works too:
-pip pulls the library family straight from git (it clones internally,
-you keep exactly one checkout):
+`ruff check` and `ruff format --check` lint the source. GitHub Actions runs
+the same gates — `lint-ruff` and `test-pytest`, alongside `license-reuse`,
+`spell-codespell`, `hygiene-prehooks` and `commits-conventional` — on pushes
+to `main` and on every pull request.
 
-```sh
-python3 -m venv .venv && . .venv/bin/activate
-pip install \
-  "mcuhome-model @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/model" \
-  "mcuhome-compiler @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/compiler" \
-  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome-workbench" \
-  -e '.[dev]'
-```
+## Security
 
-Then:
+The private signing key stays on the machine the command runs on: a build
+yields an unsigned image whichever method ran, and a separate step on this
+host applies the signature, so a build server is never handed a key.
+Commissioning passcodes are masked in output that merely passes by, and
+only `mcuhome device matter-pairing` or an explicit `--show-sensitive`
+prints them. Report a vulnerability through the organization's security
+policy, [SECURITY.md](https://github.com/mcu-home/.github/blob/main/SECURITY.md).
 
-```sh
-mcuhome --help
-pytest                            # the CLI behavior tests, ~1 s
-ruff check . && ruff format --check .
-```
+## Documentation
 
-The tests never compile firmware and never touch docker or a real
-signing key — stage 5 is stubbed, the same way the builder's own suite
-does it.
+- [Getting started](https://t.mcuhome.org/cli/docs/getting-started/0.1/) — a
+  first project, device and build
+- [Supported boards](https://t.mcuhome.org/cli/docs/device-supported-boards/0.1/)
+  — the targets a device can name
+- [Decision records](docs/adr) — the command vocabulary and the output
+  contract
+- [MCUHome on GitHub](https://github.com/mcu-home) — the other repositories
+  of the project
+
+## Contributing and support
+
+Problems and questions go to
+[Issues](https://github.com/mcu-home/mcuhome-cli/issues). The contributing
+rules live with the organization, in
+[CONTRIBUTING.md](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 
 ## License
 
-Apache-2.0, like every MCUHome repository.
+Apache License 2.0 — see [LICENSE](LICENSE).
