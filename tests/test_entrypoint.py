@@ -13,7 +13,7 @@ from importlib.metadata import entry_points
 
 import pytest
 
-from mcuhome_cli.cli import build_parser, main
+from mcuhome.cli.main import build_parser, main
 
 #: The decided vocabulary (cli ADR 0003 §2): project- and
 #: environment-scoped commands top-level, device-scoped ones under the
@@ -43,11 +43,11 @@ PROJECT_COMMANDS = ["init", "info", "upgrade"]
 
 
 def test_the_console_script_points_at_this_package() -> None:
-    """`pip install mcuhome` is what puts `mcuhome` on PATH (ADR 0020 §2)."""
+    """`pip install mcuhome-cli` is what puts `mcuhome` on PATH."""
     found = [ep for ep in entry_points(group="console_scripts") if ep.name == "mcuhome"]
     assert found, "no console script called `mcuhome` is installed"
     entry = found[0]
-    assert entry.value == "mcuhome_cli.cli:main"
+    assert entry.value == "mcuhome.cli.main:main"
     assert entry.load() is main
 
 

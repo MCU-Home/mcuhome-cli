@@ -61,7 +61,7 @@ from shutil import get_terminal_size
 from typing import IO, TextIO
 from unicodedata import east_asian_width
 
-from mcuhome_cli.output import BOLD, DIM, GREEN, RED, YELLOW, Output
+from mcuhome.cli.output import BOLD, DIM, GREEN, RED, YELLOW, Output
 
 __all__ = [
     "PENDING",

@@ -115,11 +115,11 @@ keys — is never translated.
 
 ## Pinned during implementation (C1, 2026-08-14)
 
-- Module homes: the contract lives in three modules of `mcuhome_cli` —
+- Module homes: the contract lives in three modules of `mcuhome.cli` —
   `output.py` (modes, stream discipline, colors, the resolved
   interactivity), `phases.py` (the three-phase runner and the exit-code
   vocabulary), `i18n.py` (the gettext scaffolding, domain `mcuhome`,
-  catalogs under `mcuhome_cli/locale/`).
+  catalogs under `mcuhome/cli/locale/`).
 - Stream message shape: every NDJSON message is
   `{"verb": ..., ...payload}`; `result` carries the document under a
   `document` key, `error` one serialized error under `error`. The
@@ -153,7 +153,7 @@ keys — is never translated.
   a file is a shell redirect. `-o` selects the output format on every
   command that has machine output (`device validate`, `device build`,
   `device list`, `config *`, `doctor`) and means nothing else anywhere.
-- §1's one table style is `mcuhome_cli.output.format_table` — plain
+- §1's one table style is `mcuhome.cli.output.format_table` — plain
   cells, aligned columns, two spaces apart; a caller that wants color
   styles the finished line (alignment counts characters). `device
   list` and `config print` render through it; `doctor` styles its
@@ -178,7 +178,7 @@ keys — is never translated.
 A build is minutes of someone else's output; the two questions a person
 has — how far along, and where is this running — got no answer while
 the compile log scrolled the terminal away. Decided and built
-(`mcuhome_cli/buildview.py`):
+(`mcuhome/cli/buildview.py`):
 
 - **Step line.** Every build states its steps up front and repaints
   them in place: green done, yellow running, red failed, plain pending.

@@ -45,7 +45,7 @@ from typing import Any
 
 from mcuhome.model.errors import MCUHomeError
 
-from mcuhome_cli.i18n import _
+from mcuhome.cli.i18n import _
 
 __all__ = [
     "HUMAN",

@@ -9,7 +9,7 @@
 #           that the console entry point loads and `--help` works for
 #           every command.
 #
-# The test gate needs the workbench (mcu-home/mcuhome) and, since the
+# The test gate needs the workbench (mcu-home/mcuhome-workbench) and, since the
 # ADR 0024 split, the model+compiler from mcu-home/mcuhome-sdk — both
 # public siblings, plain checkouts, no deploy keys. Once the packages
 # are published this becomes a plain pip install.
@@ -65,8 +65,8 @@ jobs:
       - name: Checkout the workbench
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: mcu-home/mcuhome
-          path: .deps/mcuhome
+          repository: mcu-home/mcuhome-workbench
+          path: .deps/mcuhome-workbench
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -83,7 +83,7 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check \
             ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome[remote,generate]' \
+            './.deps/mcuhome-workbench[remote,generate]' \
             ./.deps/mcuhome-sdk/packaging/compiler
           python -m pip install --disable-pip-version-check -e '.[dev]'
 

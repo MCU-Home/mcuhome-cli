@@ -29,7 +29,7 @@ from pathlib import Path
 
 from mcuhome.model.errors import MCUHomeError
 
-from mcuhome_cli.output import Output
+from mcuhome.cli.output import Output
 
 __all__ = ["EXIT_FAILURE", "EXIT_OK", "EXIT_USAGE", "run"]
 

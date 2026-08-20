@@ -15,8 +15,8 @@ import os
 
 import pytest
 
-from mcuhome_cli import buildview
-from mcuhome_cli.buildview import (
+from mcuhome.cli import buildview
+from mcuhome.cli.buildview import (
     DONE,
     FAILED,
     BuildStep,
@@ -25,7 +25,7 @@ from mcuhome_cli.buildview import (
     log_tail,
     make_view,
 )
-from mcuhome_cli.output import Output
+from mcuhome.cli.output import Output
 
 INTERACTIVE = Output(mode="human", color=False, interactive=True)
 PLAIN = Output(mode="human", color=False, interactive=False)

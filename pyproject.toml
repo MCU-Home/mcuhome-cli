@@ -10,8 +10,8 @@ build-backend = "hatchling.build"
 # mcuhome` should yield the command a user expects, and no other package
 # has a better claim to it — the library ships as mcuhome-model,
 # mcuhome-workbench and mcuhome-compiler, the services as
-# mcuhome-dashboard and mcuhome-build-server.
-name = "mcuhome"
+# mcuhome-ui and mcuhome-buildserver.
+name = "mcuhome-cli"
 version = "0.1.0.dev0"
 description = "The mcuhome command line: a thin shell over the MCUHome builder library."
 readme = "README.md"
@@ -44,14 +44,14 @@ dependencies = ["mcuhome-workbench[generate,remote]"]
 dev = ["pytest>=8.0"]
 
 [project.urls]
-Homepage = "https://github.com/mcu-home/cli"
-Issues = "https://github.com/mcu-home/cli/issues"
+Homepage = "https://github.com/mcu-home/mcuhome-cli"
+Issues = "https://github.com/mcu-home/mcuhome-cli/issues"
 
 [project.scripts]
-mcuhome = "mcuhome_cli.cli:main"
+mcuhome = "mcuhome.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["mcuhome_cli"]
+only-include = ["mcuhome/cli"]
 
 # Same ruff settings as the mcuhome repository; bump the pinned version
 # (CI, currently 0.16.1) together with mcuhome's.

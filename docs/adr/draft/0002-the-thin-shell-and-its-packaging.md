@@ -36,10 +36,10 @@ developer and may face more manual setup.
 
 2. **The distribution bears the plain name `mcuhome`**, so that
    `pip install mcuhome` yields the command a user expects; the
-   console script has the same name (`mcuhome = mcuhome_cli.cli:main`;
-   `python -m mcuhome_cli` is the identical entry). The platform
+   console script has the same name (`mcuhome = mcuhome.cli.main:main`;
+   `python -m mcuhome.cli` is the identical entry). The platform
    repository renounced the plain name for exactly this purpose
-   (firmware ADR 0020 §2). The import package is `mcuhome_cli`.
+   (firmware ADR 0020 §2). The import package is `mcuhome.cli`.
 
 3. **The direct dependency is the workbench:**
    `mcuhome-workbench[local,remote]`. The workbench is the API the
@@ -94,8 +94,8 @@ developer and may face more manual setup.
   the installed distribution's metadata and says `not installed` when
   it is absent.
 - The import package grew the output layer ADR 0004 §Consequences
-  allows the thin shell: `mcuhome_cli.output`, `mcuhome_cli.phases`,
-  `mcuhome_cli.i18n` beside `cli.py` and the (transitional)
+  allows the thin shell: `mcuhome.cli.output`, `mcuhome.cli.phases`,
+  `mcuhome.cli.i18n` beside `cli.py` and the (transitional)
   `servers.py`.
 - The CLI consumes the workbench's ADR 0022/0023 surface:
   `resolve_project`/`find_device` under every `<device>` argument

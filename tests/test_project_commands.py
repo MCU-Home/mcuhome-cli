@@ -20,8 +20,8 @@ import pytest
 from conftest import VALID_CONFIG
 from mcuhome.workbench import api
 
-from mcuhome_cli import output as output_module
-from mcuhome_cli.cli import _StopAfterCurrentMigration, _wait_for_builds, main
+from mcuhome.cli import output as output_module
+from mcuhome.cli.main import _StopAfterCurrentMigration, _wait_for_builds, main
 
 MARKER = ".mcuhome-project-root"
 
@@ -226,7 +226,7 @@ class _FakeSession:
 
 
 def test_the_upgrade_waits_for_a_running_build(monkeypatch, capsys) -> None:
-    monkeypatch.setattr("mcuhome_cli.cli.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("mcuhome.cli.main.time.sleep", lambda _seconds: None)
     busy = (api.RunningBuild(directory=Path("/b/porch"), device="porch", operation="build"),)
     session = _FakeSession([busy, busy, ()])
     _wait_for_builds(session, output=output_module.Output())
@@ -267,7 +267,7 @@ def test_three_ctrl_c_in_the_window_abort_now(capsys) -> None:
 def test_presses_outside_the_window_only_warn_again(monkeypatch, capsys) -> None:
     """Two presses now and one in a minute must not add up to an abort."""
     clock = [100.0]
-    monkeypatch.setattr("mcuhome_cli.cli.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("mcuhome.cli.main.time.monotonic", lambda: clock[0])
     stopper = _StopAfterCurrentMigration(output_module.Output())
     stopper._handle(signal.SIGINT, None)
     stopper._handle(signal.SIGINT, None)

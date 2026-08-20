@@ -151,7 +151,7 @@ The whole of §2 and §4 landed as one step. What the table left open:
 - `device new --name NAME` writes the starter's `friendly_name`
   (quoted); the default stays the title-cased device name. Emitting it
   into the Matter identity remains the generator's work item.
-- §4 executed in the same step: `mcuhome_cli.servers`,
+- §4 executed in the same step: `mcuhome.cli.servers`,
   `build-servers.toml`, `tokens/<label>`, `MCUHOME_BUILD_*` and the
   `--method`/`--server`/`--token` spellings are gone; user-facing
   texts in all repos (hints, docstrings, scaffold) speak this ADR's
@@ -190,7 +190,7 @@ is a decision, not a style preference.
   getting-started is not the CLI's), the version is the linking tool's
   `major.minor` (`…/cli/docs/getting-started/0.1`). Static content
   today, redirects to docs.mcuhome.org once that exists; the
-  repository behind it is github.com/mcu-home/t.mcuhome.org.
+  repository behind it is github.com/mcu-home/site-t.mcuhome.org.
 - **Board discoverability**: `device boards` (table row above) answers
   from `registry.BOARDS`/`PLANNED_BOARDS`, and `--board`'s help and the
   unknown-board refusal point at it. Deliberately not a link to

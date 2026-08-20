@@ -6,9 +6,9 @@ SPDX-License-Identifier: Apache-2.0
 # mcuhome
 
 The `mcuhome` command line — a thin shell over the
-[MCUHome library family](https://github.com/mcu-home/mcuhome). The
-distribution carries the plain name (`pip install mcuhome`) because it
-is what puts the `mcuhome` command on PATH; the library ships as
+[MCUHome library family](https://github.com/mcu-home/mcuhome-workbench). The
+distribution is `mcuhome-cli` (`pip install mcuhome-cli`), and it is
+what puts the `mcuhome` command on PATH; the library ships as
 `mcuhome-model`, `mcuhome-workbench` and `mcuhome-compiler`.
 
 It parses arguments and renders results; every stage of the actual
@@ -94,7 +94,7 @@ committed configuration names servers and never carries a credential.
 
 Nothing is on PyPI yet, so the `mcuhome-workbench` dependency and the
 SDK distributions behind it come from sibling checkouts
-(ADR 0024 split: [mcu-home/mcuhome](https://github.com/mcu-home/mcuhome)
+(ADR 0024 split: [mcu-home/mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench)
 carries the workbench,
 [mcu-home/mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) the
 model and the compiler). From this repository's root, with both cloned
@@ -118,7 +118,7 @@ python3 -m venv .venv && . .venv/bin/activate
 pip install \
   "mcuhome-model @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/model" \
   "mcuhome-compiler @ git+https://github.com/mcu-home/mcuhome-sdk#subdirectory=packaging/compiler" \
-  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome" \
+  "mcuhome-workbench[remote,generate] @ git+https://github.com/mcu-home/mcuhome-workbench" \
   -e '.[dev]'
 ```
 

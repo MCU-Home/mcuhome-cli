@@ -16,8 +16,8 @@ from pathlib import Path
 from conftest import VALID_CONFIG, make_project
 from mcuhome.model.errors import BuildError
 
-from mcuhome_cli import cli
-from mcuhome_cli.cli import main
+from mcuhome.cli import main as cli
+from mcuhome.cli.main import main
 
 BOARD = "nrf7002dk/nrf5340/cpuapp"
 

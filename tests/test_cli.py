@@ -25,10 +25,10 @@ from mcuhome.workbench import buildenv as container
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.project import Project
 
-from mcuhome_cli import __version__ as cli_version
-from mcuhome_cli import cli
-from mcuhome_cli.cli import main
-from mcuhome_cli.output import Output
+from mcuhome.cli import __version__ as cli_version
+from mcuhome.cli import main as cli
+from mcuhome.cli.main import main
+from mcuhome.cli.output import Output
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
@@ -178,9 +178,9 @@ def test_version_reports_the_whole_stack(capsys) -> None:
         main(["--version"])
     assert caught.value.code == 0
     lines = capsys.readouterr().out.strip().splitlines()
-    assert lines[0] == f"mcuhome {cli_version}"
+    assert lines[0] == f"mcuhome-cli {cli_version}"
     parts = [line.split()[0] for line in lines]
-    assert parts == ["mcuhome", "mcuhome-workbench", "mcuhome-compiler", "mcuhome-model"]
+    assert parts == ["mcuhome-cli", "mcuhome-workbench", "mcuhome-compiler", "mcuhome-model"]
     assert lines[3] == f"mcuhome-model {model_version}"
 
 

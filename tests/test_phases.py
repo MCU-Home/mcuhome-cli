@@ -8,8 +8,8 @@ import json
 
 from mcuhome.model.errors import BuildError
 
-from mcuhome_cli import phases
-from mcuhome_cli.output import JSON, Output
+from mcuhome.cli import phases
+from mcuhome.cli.output import JSON, Output
 
 
 def test_the_exit_codes_are_exactly_three() -> None:

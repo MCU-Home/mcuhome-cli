@@ -144,11 +144,11 @@ from mcuhome.workbench import buildenv as container
 from mcuhome.workbench.loader import load_yaml_file
 from mcuhome.workbench.project import check_secret_file
 
-from mcuhome_cli import __version__ as cli_version
-from mcuhome_cli import buildview, phases
-from mcuhome_cli import output as output_module
-from mcuhome_cli.i18n import _
-from mcuhome_cli.output import Output
+from mcuhome.cli import __version__ as cli_version
+from mcuhome.cli import buildview, phases
+from mcuhome.cli import output as output_module
+from mcuhome.cli.i18n import _
+from mcuhome.cli.output import Output
 
 __all__ = [
     "BUILD_DIR",
@@ -2732,7 +2732,7 @@ def _stack_version() -> str:
         compiler = "not installed"
     return "\n".join(
         [
-            f"mcuhome {cli_version}",
+            f"mcuhome-cli {cli_version}",
             f"mcuhome-workbench {api.VERSION}",
             f"mcuhome-compiler {compiler}",
             f"mcuhome-model {model_version}",
@@ -2777,7 +2777,7 @@ def _docs_url(page: str) -> str:
     linking tool is part of a link's identity (the dashboard's
     getting-started page is not this CLI's), and the version is this
     CLI's major.minor. Paths are kept alive for the binary's lifetime
-    (github.com/mcu-home/t.mcuhome.org).
+    (github.com/mcu-home/site-t.mcuhome.org).
     """
     return f"https://t.mcuhome.org/cli/docs/{page}/{'.'.join(cli_version.split('.')[:2])}"
 

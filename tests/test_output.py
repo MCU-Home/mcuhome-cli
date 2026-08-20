@@ -8,8 +8,8 @@ import json
 
 from mcuhome.model.errors import ConfigError
 
-from mcuhome_cli import output as output_module
-from mcuhome_cli.output import HUMAN, JSON, JSON_STREAM, Output, resolve
+from mcuhome.cli import output as output_module
+from mcuhome.cli.output import HUMAN, JSON, JSON_STREAM, Output, resolve
 
 # --- resolve: the three knobs -----------------------------------------
 
