@@ -1,0 +1,13 @@
+version = 1
+SPDX-PackageName = "MCUHome"
+SPDX-PackageSupplier = "The MCUHome Contributors"
+SPDX-PackageDownloadLocation = "https://github.com/mcu-home/mcuhome-cli"
+
+# Fallback annotation: files carrying their own SPDX headers take
+# precedence ("closest"); everything else (Markdown, VERSION, templates,
+# generated placeholders) is covered here.
+[[annotations]]
+path = "**"
+precedence = "closest"
+SPDX-FileCopyrightText = "2026 The MCUHome Contributors"
+SPDX-License-Identifier = "Apache-2.0"
