@@ -47,21 +47,35 @@ from
 [mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) offers the same
 operations in a browser, over the same workbench API.
 
-## Working on this repository
+## Development — how to work on this repository
 
-The repository needs Python 3.13 and its own virtual environment. Install
-the workbench, plus the model and compiler packages, from their checkouts,
-then this package with its `dev` extra, and run the suite in `tests/python`:
+This repository has its own virtual environment in `.venv/`; nothing is
+installed into the system Python or into another repository's environment.
+`bin/` holds the user-facing entry points, `scripts/` the development
+tooling: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
+every one, `list` names them, `<name>` runs one — and each check is its own
+wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
+`.venv` themselves (never activate one by hand) and are exactly what CI
+runs, one job per check.
+
+Needs Python 3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`,
+`packaging/compiler`) and `mcuhome-workbench` — this package's one
+dependency — with its `remote` and `generate` extras.
 
 ```sh
-pip install -e '.[dev]'
-pytest
+python3.13 -m venv .venv && .venv/bin/pip install \
+  ../mcuhome-sdk/packaging/model '../mcuhome-workbench[remote,generate]' \
+  ../mcuhome-sdk/packaging/compiler -e . --group dev
 ```
 
-`ruff check` and `ruff format --check` lint the source. GitHub Actions runs
-the same gates — `lint-ruff` and `test-pytest`, alongside `license-reuse`,
-`spell-codespell`, `hygiene-prehooks` and `commits-conventional` — on pushes
-to `main` and on every pull request.
+```sh
+scripts/test all
+scripts/lint all
+```
+
+The rules that hold across every MCUHome repository — coding standards,
+commits, licensing — are in the organization's
+[contributing guide](https://github.com/mcu-home/.github/blob/main/CONTRIBUTING.md).
 
 ## Security
 
