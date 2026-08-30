@@ -40,8 +40,19 @@ classifiers = [
 # yet — see the README for the dev install.
 dependencies = ["mcuhome-workbench[generate,remote]"]
 
-[project.optional-dependencies]
-# Pinned to the versions CI installs; bump here, CI follows.
+[project.urls]
+Homepage = "https://github.com/mcu-home/mcuhome-cli"
+Issues = "https://github.com/mcu-home/mcuhome-cli/issues"
+
+[project.scripts]
+mcuhome = "mcuhome.cli.main:main"
+
+# PEP 735 dependency group, not a [project.optional-dependencies] extra:
+# these tools are for working on this repository, never a runtime
+# dependency of it, so they must install standalone without pulling in
+# mcuhome-workbench and its unpublished siblings. Pinned to the versions
+# CI installs; bump here, CI follows.
+[dependency-groups]
 dev = [
   "pytest>=8.0",
   "ruff==0.16.1",
@@ -49,13 +60,6 @@ dev = [
   "reuse==5.0.2",
   "pre-commit-hooks==5.0.0",
 ]
-
-[project.urls]
-Homepage = "https://github.com/mcu-home/mcuhome-cli"
-Issues = "https://github.com/mcu-home/mcuhome-cli/issues"
-
-[project.scripts]
-mcuhome = "mcuhome.cli.main:main"
 
 [tool.hatch.build.targets.wheel]
 only-include = ["mcuhome/cli"]

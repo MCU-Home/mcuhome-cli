@@ -4,12 +4,15 @@
 # Lint gate for the mcuhome command line: one job per wrapper in
 # scripts/lint.d/, plus a pre-check that every wrapper has a job here.
 #
-# The project's runtime dependency (mcu-home/mcuhome-workbench, and
-# through it mcu-home/mcuhome-sdk) is not published yet, so `pip install
-# -e '.[dev]'` cannot resolve on its own: every job that runs it checks
-# out the same siblings as the test gate, even lint-codespell and
-# lint-reuse, which do not need them at import time. This is a
-# consequence of nothing being published pre-1.0, not a general pattern.
+# The lint tools are a PEP 735 dependency group ([dependency-groups] dev
+# in pyproject.toml), not a [project.optional-dependencies] extra: a
+# group installs standalone, without the project or its dependencies, so
+# none of these jobs need the package itself or its unpublished siblings
+# (mcu-home/mcuhome-workbench, mcu-home/mcuhome-sdk) — only the test gate
+# does, because pytest exercises the installed package.
+#
+# --group needs pip >= 25.1; each job upgrades pip in its fresh .venv
+# before using it.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -42,31 +45,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout the mcuhome builder library
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-sdk
-          path: .deps/mcuhome-sdk
-
-      - name: Checkout the workbench
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-workbench
-          path: .deps/mcuhome-workbench
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Create .venv and install
+      - name: Create .venv and install the dev tools
         run: |
           python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check \
-            ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome-workbench[remote,generate]' \
-            ./.deps/mcuhome-sdk/packaging/compiler
-          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check --group dev
 
       - name: scripts/lint ruff
         run: scripts/lint ruff
@@ -79,31 +67,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout the mcuhome builder library
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-sdk
-          path: .deps/mcuhome-sdk
-
-      - name: Checkout the workbench
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-workbench
-          path: .deps/mcuhome-workbench
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Create .venv and install
+      - name: Create .venv and install the dev tools
         run: |
           python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check \
-            ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome-workbench[remote,generate]' \
-            ./.deps/mcuhome-sdk/packaging/compiler
-          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check --group dev
 
       - name: scripts/lint codespell
         run: scripts/lint codespell
@@ -116,31 +89,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout the mcuhome builder library
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-sdk
-          path: .deps/mcuhome-sdk
-
-      - name: Checkout the workbench
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-workbench
-          path: .deps/mcuhome-workbench
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Create .venv and install
+      - name: Create .venv and install the dev tools
         run: |
           python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check \
-            ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome-workbench[remote,generate]' \
-            ./.deps/mcuhome-sdk/packaging/compiler
-          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check --group dev
 
       - name: scripts/lint reuse
         run: scripts/lint reuse
@@ -153,31 +111,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout the mcuhome builder library
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-sdk
-          path: .deps/mcuhome-sdk
-
-      - name: Checkout the workbench
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: mcu-home/mcuhome-workbench
-          path: .deps/mcuhome-workbench
-
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Create .venv and install
+      - name: Create .venv and install the dev tools
         run: |
           python -m venv .venv
-          .venv/bin/pip install --disable-pip-version-check \
-            ./.deps/mcuhome-sdk/packaging/model \
-            './.deps/mcuhome-workbench[remote,generate]' \
-            ./.deps/mcuhome-sdk/packaging/compiler
-          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -U pip
+          .venv/bin/pip install --disable-pip-version-check --group dev
 
       - name: scripts/lint hygiene
         run: scripts/lint hygiene

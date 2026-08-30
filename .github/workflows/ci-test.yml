@@ -66,13 +66,16 @@ jobs:
         # against an index. The [generate] extra's compiler pin is
         # satisfied by the sdk copy on the same command line. Installed
         # into this job's own .venv — scripts/test selects it itself.
+        # The dev tools are a PEP 735 dependency group (--group dev),
+        # which needs pip >= 25.1; upgrade first.
         run: |
           python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check -U pip
           .venv/bin/pip install --disable-pip-version-check \
             ./.deps/mcuhome-sdk/packaging/model \
             './.deps/mcuhome-workbench[remote,generate]' \
             ./.deps/mcuhome-sdk/packaging/compiler
-          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -e . --group dev
 
       - name: scripts/test pytest
         run: scripts/test pytest
