@@ -3,11 +3,14 @@
 #
 # CI for the mcuhome command line. Two gates:
 #
-#   lint  — the same ruff checks the mcuhome repository runs; the pinned
-#           version is bumped together with mcuhome's.
-#   test  — pytest over the CLI behavior tests, including a smoke test
-#           that the console entry point loads and `--help` works for
-#           every command.
+#   lint  — scripts/lint (the same ruff checks the mcuhome repository
+#           runs; the pinned version is bumped together with mcuhome's).
+#   test  — scripts/test (pytest over the CLI behavior tests, including a
+#           smoke test that the console entry point loads and `--help`
+#           works for every command).
+#
+# Both scripts select this job's own .venv, so the job creates one first,
+# the same way a developer does locally.
 #
 # The test gate needs the workbench (mcu-home/mcuhome-workbench) and, since the
 # ADR 0024 split, the model+compiler from mcu-home/mcuhome-sdk — both
@@ -40,14 +43,13 @@ jobs:
           python-version: "3.13"
 
       # Pinned to the same version as mcuhome's CI; bump both together.
-      - name: Install lint tools
-        run: python -m pip install --disable-pip-version-check ruff==0.16.1
+      - name: Create .venv and install lint tools
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check ruff==0.16.1
 
-      - name: ruff check
-        run: ruff check .
-
-      - name: ruff format --check
-        run: ruff format --check .
+      - name: scripts/lint
+        run: scripts/lint
 
   test-pytest:
     name: Test (pytest)
@@ -73,22 +75,24 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Install
+      - name: Create .venv and install
         # One namespace, two repositories since the ADR 0024 split:
         # model+compiler from mcuhome-sdk/packaging, the workbench from
         # the mcuhome repo root. One invocation, so pip resolves the
         # sibling pins against the copies being installed rather than
         # against an index. The [generate] extra's compiler pin is
-        # satisfied by the sdk copy on the same command line.
+        # satisfied by the sdk copy on the same command line. Installed
+        # into this job's own .venv — scripts/test selects it itself.
         run: |
-          python -m pip install --disable-pip-version-check \
+          python -m venv .venv
+          .venv/bin/pip install --disable-pip-version-check \
             ./.deps/mcuhome-sdk/packaging/model \
             './.deps/mcuhome-workbench[remote,generate]' \
             ./.deps/mcuhome-sdk/packaging/compiler
-          python -m pip install --disable-pip-version-check -e '.[dev]'
+          .venv/bin/pip install --disable-pip-version-check -e '.[dev]'
 
-      - name: pytest
-        run: pytest
+      - name: scripts/test
+        run: scripts/test
 
   spell-codespell:
     name: Spelling (codespell)
