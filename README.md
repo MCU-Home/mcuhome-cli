@@ -58,12 +58,12 @@ wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
 `.venv` themselves (never activate one by hand) and are exactly what CI
 runs, one job per check.
 
-Needs Python 3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`,
+Needs Python ≥3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`,
 `packaging/compiler`) and `mcuhome-workbench` — this package's one
 dependency — with its `remote` and `generate` extras.
 
 ```sh
-python3.13 -m venv .venv && .venv/bin/pip install \
+python3 -m venv .venv && .venv/bin/pip install \
   ../mcuhome-sdk/packaging/model '../mcuhome-workbench[remote,generate]' \
   ../mcuhome-sdk/packaging/compiler -e . --group dev
 ```
