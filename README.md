@@ -93,8 +93,6 @@ policy, [SECURITY.md](https://github.com/mcu-home/.github/blob/main/SECURITY.md)
   first project, device and build
 - [Supported boards](https://t.mcuhome.org/cli/docs/device-supported-boards/0.1/)
   — the targets a device can name
-- [Decision records](docs/adr) — the command vocabulary and the output
-  contract
 - [MCUHome on GitHub](https://github.com/mcu-home) — the other repositories
   of the project
 
