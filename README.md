@@ -64,7 +64,8 @@ dependency — with its `remote` and `generate` extras.
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install \
-  ../mcuhome-sdk/packaging/model '../mcuhome-workbench[remote,generate]' \
+  ../mcuhome-sdk/packaging/model -e ../mcuhome-packagetool \
+  '../mcuhome-workbench[remote,generate]' \
   ../mcuhome-sdk/packaging/compiler -e . --group dev
 ```
 

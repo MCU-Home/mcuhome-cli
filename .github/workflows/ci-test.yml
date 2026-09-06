@@ -53,6 +53,13 @@ jobs:
           repository: mcu-home/mcuhome-workbench
           path: .deps/mcuhome-workbench
 
+      # The workbench imports mcuhome.packagetool.
+      - name: Checkout the package registry verifier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mcu-home/mcuhome-packagetool
+          path: .deps/mcuhome-packagetool
+
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -73,6 +80,7 @@ jobs:
           .venv/bin/pip install --disable-pip-version-check -U pip
           .venv/bin/pip install --disable-pip-version-check \
             ./.deps/mcuhome-sdk/packaging/model \
+            -e ./.deps/mcuhome-packagetool \
             './.deps/mcuhome-workbench[remote,generate]' \
             ./.deps/mcuhome-sdk/packaging/compiler
           .venv/bin/pip install --disable-pip-version-check -e . --group dev
