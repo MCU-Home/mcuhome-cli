@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -1382,13 +1383,15 @@ def test_a_failed_container_build_quotes_the_programs_own_account():
             },
         },
     )
-    failure = cli._delivered_build_failed(_local_failure(outcome))
+    failure = cli._delivered_build_failed(
+        _local_failure(outcome), local_where="in the build container"
+    )
     assert "error.context.mismatch" in failure.message
     assert "disagrees with its integrity list" in failure.message
     assert "model/device-model.json" in failure.message
     # The hint names where the build ran as a complete phrase, not as a
     # noun the branch below it has to finish.
-    assert "the build ran in the MCUHome build container." in (failure.hint or "")
+    assert "the build ran in the build container." in (failure.hint or "")
 
 
 def test_a_failed_container_build_without_a_document_stays_terse():
@@ -1402,7 +1405,9 @@ def test_a_failed_container_build_without_a_document_stays_terse():
         problems=("no result document was written at the path the request named",),
         result=None,
     )
-    failure = cli._delivered_build_failed(_local_failure(outcome))
+    failure = cli._delivered_build_failed(
+        _local_failure(outcome), local_where="in the build container"
+    )
     assert "The program said" not in failure.message
     assert "no result document" in failure.message
 
@@ -1432,7 +1437,7 @@ def test_a_failed_remote_build_quotes_the_verdicts_error_envelope():
             error={"message": "the compiler ran out of memory", "details": {"image": "app"}},
         ),
     )
-    failure = cli._delivered_build_failed(outcome)
+    failure = cli._delivered_build_failed(outcome, local_where="in the build container")
     assert "ran out of memory" in failure.message
     assert '"app"' in failure.message
     assert "the build ran on a build server." in (failure.hint or "")
@@ -1696,6 +1701,163 @@ def test_a_build_outside_a_project_carries_no_registry_settings(
     assert seen[0].registries == ()
 
 
+# ---- the build section, end to end ---------------------------------------
+
+
+def _bench_node_project(tmp_path: Path, configuration: str) -> Path:
+    """A project with one device and a stated ``mcuhome.yaml``."""
+    project = make_project(tmp_path / "project")
+    (project / "devices" / "bench-node").mkdir(parents=True)
+    (project / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, encoding="utf-8")
+    (project / "mcuhome.yaml").write_text(configuration, encoding="utf-8")
+    return project
+
+
+def _build_argv(project: Path, tmp_path: Path) -> list[str]:
+    return [
+        "device",
+        "build",
+        "bench-node",
+        "--project-dir",
+        str(project),
+        "--sdk-sources",
+        str(tmp_path),
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+
+
+def test_the_projects_build_section_reaches_the_request_as_resolved_options(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """What this invocation resolved is what the build gets.
+
+    A request that states no options has them resolved by the workbench
+    instead — from the environment and the project root the request
+    carries, which is a second reading of the same files by a party that
+    knows less about this invocation than the command line does. So the
+    command line states what it resolved, and the workbench's own
+    resolver is answered with exactly that object rather than working it
+    out again.
+    """
+    project = _bench_node_project(tmp_path, "build:\n  mode: subprocess\n")
+    seen = _capture_requests(monkeypatch)
+    assert main(_build_argv(project, tmp_path)) == 1
+    capsys.readouterr()
+    assert seen[0].options is not None
+    assert seen[0].options.mode == buildmethods.MODE_SUBPROCESS
+    assert seen[0].options.mode_source == str(project / "mcuhome.yaml")
+    assert buildmethods.options_for(seen[0]) is seen[0].options
+
+
+def test_the_build_uses_this_invocations_notion_of_the_project(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """Where the two resolutions disagree, the command line's answer wins.
+
+    A bare device file outside any project is built against a stand-in
+    project — the file's own directory — whose ``mcuhome.yaml`` this
+    command line reads, while the request deliberately states no project
+    root: the stand-in is not a directory MCUHome ever wrote trust
+    anchors into. Left to work the section out for itself, the workbench
+    would answer from a different set of files than the invocation just
+    did, which is the whole reason the answer travels with the request.
+    """
+    loose = tmp_path / "loose"
+    loose.mkdir()
+    (loose / "bench-node.yaml").write_text(VALID_CONFIG, encoding="utf-8")
+    (loose / "mcuhome.yaml").write_text("build:\n  mode: subprocess\n", encoding="utf-8")
+    seen = _capture_requests(monkeypatch)
+    argv = [
+        "device",
+        "build",
+        str(loose / "bench-node.yaml"),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--sdk-sources",
+        str(tmp_path),
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert seen[0].project_root is None
+    assert seen[0].options.mode == buildmethods.MODE_SUBPROCESS
+    # What the workbench would have resolved on its own: no project root,
+    # so no project layer, so the default mode — the other answer.
+    on_its_own = buildmethods.options_for(dataclasses.replace(seen[0], options=None))
+    assert on_its_own.mode == buildmethods.MODE_CONTAINER
+
+
+def test_a_build_without_a_configured_mode_still_carries_the_default(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """Options are always stated, so nothing downstream resolves a second time."""
+    project = _bench_node_project(tmp_path, "")
+    seen = _capture_requests(monkeypatch)
+    assert main(_build_argv(project, tmp_path)) == 1
+    capsys.readouterr()
+    assert seen[0].options is not None
+    assert seen[0].options.mode == buildmethods.MODE_CONTAINER
+
+
+async def _delivered_nothing(request, *, method):
+    """A local build that comes back with nothing usable — a failed one."""
+    return buildmethods.BuildOutcome(
+        method=buildmethods.LOCAL,
+        successful=False,
+        status="failure",
+        context_id="sha256:" + "4" * 64,
+        artifacts=(),
+        out_dir=None,
+        report=imgtool.BUILD_REPORT_FILE,
+    )
+
+
+def _capture_steps(monkeypatch) -> list[list]:
+    """Record the step lines a build declares, and render them as before."""
+    seen: list[list] = []
+    real = cli.buildview.make_view
+
+    def record(steps, **kwargs):
+        seen.append(list(steps))
+        return real(steps, **kwargs)
+
+    monkeypatch.setattr(cli.buildview, "make_view", record)
+    return seen
+
+
+@pytest.mark.parametrize(
+    ("configured", "heading", "compile_step"),
+    [
+        ("build:\n  mode: subprocess\n", "on this machine", "compile (this machine)"),
+        ("build:\n  mode: container\n", "in the build container", "compile (build container)"),
+        ("", "in the build container", "compile (build container)"),
+    ],
+    ids=["subprocess", "container", "unconfigured"],
+)
+def test_a_build_says_which_of_the_two_local_executions_it_runs(
+    tmp_path, capsys, monkeypatch, configured: str, heading: str, compile_step: str
+) -> None:
+    """The heading, the compile step and the failure follow ``build.mode``.
+
+    A build that starts no container announced one all the same, in all
+    three lines, because "the build container" was what any local build
+    was called. Each mode now says what it does — and every line comes
+    from one answer, so they cannot disagree with each other.
+    """
+    project = _bench_node_project(tmp_path, configured)
+    steps = _capture_steps(monkeypatch)
+    monkeypatch.setattr(cli.api, "run_build", _delivered_nothing)
+    assert main(_build_argv(project, tmp_path)) == 1
+    captured = capsys.readouterr()
+    assert heading in captured.out
+    assert f"the build ran {heading}." in captured.err
+    if heading != "in the build container":
+        assert "build container" not in captured.out + captured.err
+    assert [line.label for line in steps[0] if line.key == "compile"] == [compile_step]
+
+
 def test_an_unknown_builder_is_a_refusal_listing_the_configured_ones(
     tmp_path, capsys, monkeypatch
 ) -> None:
@@ -1827,20 +1989,20 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
     assert main(argv) == 1
     err = capsys.readouterr().err
     assert "--sdk-sources" in err
-    assert "sdk_sources" in err
+    assert "build.sdk_sources" in err
     assert "Traceback" not in err
 
 
 def test_the_sdk_source_variable_reaches_a_remote_request_too(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """E65: the ladder's second rung serves ``remote``, not only ``local``.
+    """The ladder's second rung serves ``remote``, not only ``local``.
 
-    ``MCUHOME_SDK_SOURCES`` is the registry option's environment channel
-    (ADR 0022) and serves the ``remote`` method exactly as it serves
-    ``local``, so the variable is asserted against the request the remote
-    method actually receives, rather than against the resolution helper,
-    which would prove only that the helper works.
+    ``MCUHOME_BUILD_SDK_SOURCES`` is the environment channel of the
+    ``build.sdk_sources`` option, and it serves the ``remote`` method
+    exactly as it serves ``local`` — so the variable is asserted against
+    the request the remote method actually receives, rather than against
+    the resolution helper, which would prove only that the helper works.
     """
     seen: list[buildmethods.BuildRequest] = []
 
@@ -1850,7 +2012,7 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
 
     monkeypatch.setattr(cli.api, "run_build", refuse)
     monkeypatch.setenv(
-        "MCUHOME_SDK_SOURCES", os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
+        "MCUHOME_BUILD_SDK_SOURCES", os.pathsep.join([str(tmp_path / "a"), str(tmp_path / "b")])
     )
     argv = [
         "device",

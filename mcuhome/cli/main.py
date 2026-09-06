@@ -59,10 +59,12 @@ not merely from the ones that happen to run elsewhere.
 create a build context, a context is content-addressed over the SDK
 package's hash, and the pin is therefore resolved *here* on either
 method — what differs is only who fetches the bytes afterwards and
-checks them against it. The flag is an option of the ADR 0022 registry:
-``MCUHOME_SDK_SOURCES`` and the configuration files (project, user,
-system) set it too, through one resolution
-(:func:`mcuhome.workbench.api.resolve_settings`), and so is ``--jobs``.
+checks them against it. The flag sets the ``build.sdk_sources`` option of
+the configuration registry: ``MCUHOME_BUILD_SDK_SOURCES`` and the
+``build:`` section of the configuration files (project, user, system) set
+it too, through one resolution
+(:func:`mcuhome.workbench.api.resolve_settings`); ``--jobs`` is an option
+of the same registry.
 ``config`` edits the same registry the build reads — ``print`` shows
 every effective value with its origin layer, ``set``/``unset`` edit one
 scope's file (``--project`` by default) through the round-trip editor,
@@ -233,7 +235,12 @@ def _settings(args: argparse.Namespace, project: api.Project | None) -> api.Sett
     given: dict[str, object] = {}
     sources = getattr(args, "sdk_sources", None)
     if sources:
-        given["sdk_sources"] = tuple(expand(entry, env) for entry in sources)
+        # `--sdk-sources` keeps its spelling while the option it sets is
+        # `build.sdk_sources`: the registry derives no flag for an option
+        # that states an area, and this flag is older than the areas are.
+        # The mapping lives here because the flag belongs to this command
+        # line, not to the registry.
+        given["build.sdk_sources"] = tuple(expand(entry, env) for entry in sources)
     if getattr(args, "jobs", None):
         given["jobs"] = args.jobs
     return api.resolve_settings(project=project, env=env, args=given)
@@ -1075,6 +1082,21 @@ def _environment_note(facts: dict[str, Any], *, output: Output) -> str | None:
     return _note("build environment", parts, output=output)
 
 
+def _local_execution(options: api.BuildOptions) -> tuple[str, str]:
+    """What a local build runs in: the heading's words, and the step's.
+
+    ``build.mode`` decides it — a build container this machine starts, or
+    the build environment MCUHome unpacked here, run as an ordinary child
+    process. Both lines are taken from the one answer so that the heading
+    and the compile step cannot say different things about the same
+    build, which is what announcing a container for a build that starts
+    none amounted to.
+    """
+    if options.mode == api.MODE_SUBPROCESS:
+        return "on this machine", "this machine"
+    return "in the build container", "build container"
+
+
 def _bootloader_public_key(key: signing.SigningKey, out_dir: Path) -> Path:
     """The PUBLIC key file west compiles into the bootloader (E56).
 
@@ -1132,10 +1154,15 @@ def _build_delivered(
     jobs, jobs_source = _resolve_jobs(settings)
     remote = method == api.REMOTE
     server, token = (selection.server, selection.token) if remote else (None, None)
+    # The `build` section of this machine's configuration, resolved once
+    # here and handed to the build: it decides what a local build runs in,
+    # and the two lines below say so.
+    options = api.build_options(settings)
+    local_where, local_step = _local_execution(options)
 
     if not output.machine:
         print()
-        where = "on a build server" if remote else "in the build container"
+        where = "on a build server" if remote else local_where
         print(
             f"{output.heading('Building')} {output.style(model.device.name, output_module.BOLD)} "
             f"for {model.device.board} {output.muted(where)}"
@@ -1171,7 +1198,7 @@ def _build_delivered(
         # resolved while the build runs, so a label fixed before it starts
         # would either be a guess or force the resolution to happen twice.
         # The build environment step states it, once and for good.
-        where = "build container"
+        where = local_step
     steps = [
         buildview.BuildStep("validate", "validate", state=buildview.DONE),
         buildview.BuildStep("environment", "build environment"),
@@ -1220,7 +1247,13 @@ def _build_delivered(
                 env=env,
                 jobs=jobs,
                 signing_pub=signing_pub,
-                sdk_sources=settings.value("sdk_sources"),
+                sdk_sources=settings.value("build.sdk_sources"),
+                # What this command line resolved, stated rather than
+                # left to be resolved a second time: the workbench works
+                # out the `build` section itself for a caller that hands
+                # it none, from another notion of the project than the one
+                # this invocation settled on.
+                options=options,
                 # The override only. Which environment a build runs in is
                 # the device's own statement, resolved against a registry
                 # while the build runs — so there is nothing to work out
@@ -1253,7 +1286,7 @@ def _build_delivered(
             method=method,
         )
         if not outcome.successful:
-            raise _delivered_build_failed(outcome)
+            raise _delivered_build_failed(outcome, local_where=local_where)
 
         on_step("artifacts")
         copied = _collect_delivered_artifacts(outcome, out_dir)
@@ -1359,7 +1392,7 @@ def _collect_delivered_artifacts(
     return copied
 
 
-def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
+def _delivered_build_failed(outcome: api.BuildOutcome, *, local_where: str) -> BuildError:
     """A build whose result was not a conforming deliverable.
 
     Two voices speak here and both are quoted. ``problems`` is the
@@ -1370,6 +1403,12 @@ def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
     only that document and not a line of build log, so dropping it here
     left "status 'failure'; exited 1" as the entire diagnosis of a failure
     the program had explained precisely.
+
+    *local_where* is what a local build ran in, in the caller's own words
+    (:func:`_local_execution`) — stated rather than assumed, because a
+    local build is a container or a child process on this machine and the
+    diagnosis of a failure is the worst place to name the wrong one. It
+    has no default for the same reason.
     """
     # The local method's detail wraps the backend outcome; the remote
     # method's *is* the outcome. Both carry the same §5.4 vocabulary.
@@ -1391,9 +1430,7 @@ def _delivered_build_failed(outcome: api.BuildOutcome) -> BuildError:
     if details:
         said.append(json.dumps(details, sort_keys=True))
     account = f" The program said: {' — '.join(said)}" if said else ""
-    where = (
-        "on a build server" if outcome.method == api.REMOTE else "in the MCUHome build container"
-    )
+    where = "on a build server" if outcome.method == api.REMOTE else local_where
     return BuildError(
         f"The firmware did not build: {problems}.{account}",
         hint=(
@@ -2650,7 +2687,7 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
         else:
             configured_builders = settings.value("builders")
             if not configured_builders:
-                detail = _("none configured — a plain build uses the local build container")
+                detail = _("none configured — a plain build runs on this machine")
             else:
                 listed = ", ".join(
                     f"{item.name} ({item.type}, {item.layer})" for item in configured_builders
@@ -3089,7 +3126,7 @@ def build_parser() -> argparse.ArgumentParser:
     config_set_parser.add_argument(
         "value",
         help=(
-            "the value to write; list-valued options (sdk_sources) take several "
+            "the value to write; list-valued options (build.sdk_sources) take several "
             f"entries separated by {os.pathsep!r}, like their environment variable"
         ),
     )
@@ -3201,8 +3238,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "build through this configured builder (`builders:` in any "
             "configuration layer). Default: the configured default_builder "
-            f"({option_env_var('default_builder')} sets it too), else the local "
-            "build container"
+            f"({option_env_var('default_builder')} sets it too), else a local "
+            "build on this machine"
         ),
     )
     build_parser_.add_argument(
@@ -3214,8 +3251,8 @@ def build_parser() -> argparse.ArgumentParser:
             "build fully manually in this mode, bypassing the builders "
             "configuration: "
             + ", ".join(api.METHODS)
-            + " — local compiles in a build container on this machine, remote on "
-            "a build server; each mode has its own flags below"
+            + " — local compiles on this machine, remote on a build server; "
+            "each mode has its own flags below"
         ),
     )
     build_parser_.add_argument(
@@ -3278,8 +3315,9 @@ def build_parser() -> argparse.ArgumentParser:
             "pinned to (repeatable; searched in order). Needed by the local and "
             "remote modes alike — both create a build context, and the pin is "
             "part of its identity. An option of the configuration registry: "
-            f"{option_env_var('sdk_sources')} is a PATH-style list of "
-            "them, and the configuration files take a `sdk_sources:` list"
+            f"{option_env_var('build.sdk_sources')} is a PATH-style list of "
+            "them, and the configuration files take a `sdk_sources:` list "
+            "under `build:`"
         ),
     )
     build_parser_.add_argument(

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import ociregistry
+from mcuhome.workbench import configuration, ociregistry
 from mcuhome.workbench import orchestrator as lb
 from mcuhome.workbench.project import init_project
 
@@ -93,12 +93,38 @@ def _no_real_user_environment(monkeypatch, tmp_path):
     for variable in (
         "MCUHOME_SIGNING_KEY",
         "MCUHOME_PROJECT_DIR",
-        "MCUHOME_SDK_SOURCES",
+        "MCUHOME_BUILD_SDK_SOURCES",
         "MCUHOME_JOBS",
         "MCUHOME_DEFAULT_BUILDER",
         "NO_COLOR",
     ):
         monkeypatch.delenv(variable, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_system_layer(monkeypatch, tmp_path_factory):
+    """No test may read the machine's own ``/etc/mcuhome``.
+
+    The command line resolves the same five layers everything else does,
+    and the system layer is the one that is not derived from a stated
+    environment by convention — a machine's is where the machine says it
+    is. A developer or a CI image carrying
+    ``/etc/mcuhome/configuration.yaml`` would otherwise feed it into
+    every test that runs a build, and the tests about what this
+    invocation resolved would answer differently there than here.
+    ``XDG_CONFIG_DIRS`` is what states that directory, so the process
+    gets one pointing at an empty directory of this suite's own, and an
+    environment stated without the variable is answered with the same
+    empty one.
+    """
+    empty = tmp_path_factory.mktemp("system-config")
+    monkeypatch.setenv("XDG_CONFIG_DIRS", str(empty))
+    real = configuration.system_config_dir
+
+    def stated_or_empty(env):
+        return real(env) if env.get("XDG_CONFIG_DIRS") else empty / "mcuhome"
+
+    monkeypatch.setattr(configuration, "system_config_dir", stated_or_empty)
 
 
 @pytest.fixture(autouse=True)
