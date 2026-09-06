@@ -1231,6 +1231,15 @@ def _build_delivered(
                 # everywhere means the user's cache directory, which is
                 # the answer for everyone who never thinks about it.
                 ccache_dir=settings.value("ccache_dir"),
+                # The project's trust anchors live under project_root, and
+                # registries is what mcuhome.yaml's `registry:` block
+                # resolved to. Both stay None/empty outside a project —
+                # including the stand-in root `resolve_device` invents for
+                # a bare YAML file with no marker above it, which is not a
+                # project MCUHome ever wrote trust anchors into, so a
+                # registry must not be attempted against it either.
+                project_root=(project.root if project is not None and project.discovered else None),
+                registries=settings.value("registry"),
                 server=server,
                 token=token,
                 wait_for_turn=not args.no_wait,

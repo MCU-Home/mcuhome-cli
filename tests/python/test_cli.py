@@ -1626,6 +1626,76 @@ def test_the_default_builder_answers_a_plain_build(tmp_path, capsys, monkeypatch
     assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/ws", "file-token")
 
 
+# ---- registry configuration, end to end ----------------------------------
+
+
+def test_a_registry_block_reaches_the_build_request(tmp_path, capsys, monkeypatch) -> None:
+    """The last hop: a project's ``registry:`` block reaches the request.
+
+    ``mcuhome.yaml``'s ``registry:`` is what the workbench's
+    ``_package_registry`` needs to build a package-registry promise, so it
+    has to arrive on the request exactly as the project stated it —
+    together with the project root the trust anchors live under.
+    """
+    project = make_project(tmp_path / "project")
+    (project / "devices" / "bench-node").mkdir(parents=True)
+    (project / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, encoding="utf-8")
+    (project / "mcuhome.yaml").write_text(
+        "registry:\n  mirror.example.org:\n    untrusted: true\n",
+        encoding="utf-8",
+    )
+    seen = _capture_requests(monkeypatch)
+    argv = [
+        "device",
+        "build",
+        "bench-node",
+        "--project-dir",
+        str(project),
+        "--sdk-sources",
+        str(tmp_path),
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert seen[0].project_root == project
+    assert [settings.base_domain for settings in seen[0].registries] == ["mirror.example.org"]
+
+
+def test_a_build_outside_a_project_carries_no_registry_settings(
+    tmp_path, capsys, monkeypatch
+) -> None:
+    """``--model`` never resolves a project, so neither field is invented.
+
+    The build-server entry point (``--model``) deliberately never touches
+    a project directory (:func:`mcuhome.cli.main._build_input`), which is
+    the one case ``project_root`` is genuinely ``None`` rather than a
+    discovered-False stand-in — an embedder driving a bare model has no
+    project to read trust anchors from, and therefore no registry either.
+    """
+    direct = tmp_path / "direct"
+    assert (
+        main(["device", "build", str(EXAMPLE), "--build-dir", str(direct), "--generate-only"]) == 0
+    )
+    capsys.readouterr()
+
+    seen = _capture_requests(monkeypatch)
+    argv = [
+        "device",
+        "build",
+        "--model",
+        str(direct / "device-model.json"),
+        "--build-dir",
+        str(tmp_path / "out"),
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert seen[0].project_root is None
+    assert seen[0].registries == ()
+
+
 def test_an_unknown_builder_is_a_refusal_listing_the_configured_ones(
     tmp_path, capsys, monkeypatch
 ) -> None:
