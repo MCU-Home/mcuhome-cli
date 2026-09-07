@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from conftest import VALID_CONFIG, make_project
@@ -74,6 +75,47 @@ def test_config_print_answers_json_with_origins(tmp_path, capsys, monkeypatch) -
         "origin": "project",
         "source": str(project / "mcuhome.yaml"),
     }
+
+
+def test_config_print_renders_a_registry_without_crashing(tmp_path, capsys, monkeypatch) -> None:
+    """A configured ``registry:`` used to answer with a raw ``KeyError('name')``.
+
+    Every list of mappings was rendered as the builder list, and a
+    registry entry has no ``name`` — so the one command whose job is to
+    show what is configured died on a configuration it had accepted.
+    """
+    project = _project_with_device(tmp_path)
+    monkeypatch.chdir(project)
+    (project / "mcuhome.yaml").write_text(
+        "registry:\n"
+        "  packages.example.org:\n"
+        "    untrusted: true\n"
+        "    anchor: secrets/trust-anchor/packages.example.org.json\n"
+        "    mirrors:\n"
+        "      sdk:\n"
+        "        - /srv/mirror/one\n"
+        "        - /srv/mirror/two\n",
+        encoding="utf-8",
+    )
+    assert main(["config", "print"]) == 0
+    printed = capsys.readouterr().out
+    assert "packages.example.org" in printed
+    assert "untrusted" in printed
+    assert f"anchor {project / 'secrets/trust-anchor/packages.example.org.json'}" in printed
+    assert f"mirrors sdk: /srv/mirror/one{os.pathsep}/srv/mirror/two" in printed
+
+
+def test_config_print_renders_a_builder_with_its_layer(tmp_path, capsys, monkeypatch) -> None:
+    """The builders branch stays pinned to ``name (type, layer)``."""
+    project = _project_with_device(tmp_path)
+    monkeypatch.chdir(project)
+    (project / "mcuhome.yaml").write_text(
+        "builders:\n  - name: attic\n    type: remote\n    server: 10.0.0.5:8291\n",
+        encoding="utf-8",
+    )
+    assert main(["config", "print"]) == 0
+    printed = capsys.readouterr().out
+    assert "attic (remote, project)" in printed
 
 
 def test_config_set_writes_the_user_scope_file(tmp_path, capsys, monkeypatch) -> None:

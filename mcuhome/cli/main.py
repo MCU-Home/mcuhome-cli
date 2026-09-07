@@ -2399,6 +2399,35 @@ def _cmd_first_time_setup(args: argparse.Namespace, output: Output) -> int:
 # --------------------------------------------------------------------------
 
 
+def _structured_entry_text(entry: dict[str, Any]) -> str:
+    """One entry of a structured option — a builder, a registry — as text.
+
+    Each shape renders itself. An option whose value is a list of
+    mappings is not necessarily the builder list: `registry` is one too,
+    and rendering it as a builder is what made `config print` answer a
+    configured registry with a traceback instead of a table. An entry of
+    neither shape therefore falls back to a rendering that cannot raise,
+    so a new structured option is at worst unpretty here and never fatal.
+    """
+    if "name" in entry and "type" in entry:
+        # Builders carry their defining layer: they merge by name across
+        # the layers, so where each one came from is a per-builder fact.
+        return f"{entry['name']} ({entry['type']}, {entry['layer']})"
+    if "domain" in entry:
+        facts = []
+        if entry.get("untrusted"):
+            facts.append("untrusted")
+        if entry.get("anchor") is not None:
+            facts.append(f"anchor {entry['anchor']}")
+        mirrors = entry.get("mirrors") or {}
+        for source in sorted(mirrors):
+            facts.append(f"mirrors {source}: {os.pathsep.join(str(p) for p in mirrors[source])}")
+        if not facts:
+            return str(entry["domain"])
+        return f"{entry['domain']} ({', '.join(facts)})"
+    return ", ".join(f"{key}={entry[key]}" for key in sorted(entry))
+
+
 def _config_value_text(value: object) -> str:
     """One option's value as the human table shows it."""
     if value is None:
@@ -2407,11 +2436,7 @@ def _config_value_text(value: object) -> str:
         if not value:
             return "(none)"
         if isinstance(value[0], dict):
-            # Builders carry their defining layer (merge-by-name makes
-            # origin a per-builder fact, ADR 0023).
-            return ", ".join(
-                f"{entry['name']} ({entry['type']}, {entry['layer']})" for entry in value
-            )
+            return ", ".join(_structured_entry_text(entry) for entry in value)
         return os.pathsep.join(str(item) for item in value)
     return str(value)
 
