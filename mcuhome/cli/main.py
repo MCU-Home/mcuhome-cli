@@ -2421,10 +2421,13 @@ def _structured_entry_text(entry: dict[str, Any]) -> str:
             facts.append(f"anchor {entry['anchor']}")
         mirrors = entry.get("mirrors") or {}
         for source in sorted(mirrors):
-            facts.append(f"mirrors {source}: {os.pathsep.join(str(p) for p in mirrors[source])}")
+            # Not os.pathsep between the mirrors: a mirror is a URL as
+            # often as a directory, and joining two `https://` entries
+            # with a colon reads as one broken address.
+            facts.append(f"mirrors {source}: {', '.join(str(p) for p in mirrors[source])}")
         if not facts:
             return str(entry["domain"])
-        return f"{entry['domain']} ({', '.join(facts)})"
+        return f"{entry['domain']} ({'; '.join(facts)})"
     return ", ".join(f"{key}={entry[key]}" for key in sorted(entry))
 
 

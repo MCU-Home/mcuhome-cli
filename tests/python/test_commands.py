@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from conftest import VALID_CONFIG, make_project
@@ -94,7 +93,7 @@ def test_config_print_renders_a_registry_without_crashing(tmp_path, capsys, monk
         "    mirrors:\n"
         "      sdk:\n"
         "        - /srv/mirror/one\n"
-        "        - /srv/mirror/two\n",
+        "        - https://mirror-2.example.org/sdk/\n",
         encoding="utf-8",
     )
     assert main(["config", "print"]) == 0
@@ -102,7 +101,10 @@ def test_config_print_renders_a_registry_without_crashing(tmp_path, capsys, monk
     assert "packages.example.org" in printed
     assert "untrusted" in printed
     assert f"anchor {project / 'secrets/trust-anchor/packages.example.org.json'}" in printed
-    assert f"mirrors sdk: /srv/mirror/one{os.pathsep}/srv/mirror/two" in printed
+    # Mirrors are URLs as often as directories, so they are not joined
+    # with os.pathsep: two `https://` entries and a colon read as one
+    # broken address.
+    assert "mirrors sdk: /srv/mirror/one, https://mirror-2.example.org/sdk/" in printed
 
 
 def test_config_print_renders_a_builder_with_its_layer(tmp_path, capsys, monkeypatch) -> None:
