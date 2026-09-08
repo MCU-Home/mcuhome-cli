@@ -13,9 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import configuration, ociregistry
-from mcuhome.workbench import orchestrator as lb
+from mcuhome.workbench import configuration, containerbuild, ociregistry, subprocessbuild
 from mcuhome.workbench.project import init_project
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -149,23 +147,29 @@ def _no_docker(monkeypatch):
     """Nothing in this suite is allowed to reach a container runtime.
 
     A safety net, not a convenience: ``mcuhome build`` defaults to the
-    container (through the build-container ABI since E54), so a test that
-    forgets to stub it would otherwise quietly start a real Matter build on
-    the machine running pytest. Both container seams are closed — the
-    ``local-dev`` preflight helper and the local backend's one impure
-    docker call — so neither path can escape. Tests that want a working
-    build replace these with their own stub, which wins because their
+    container (through the build environment specification's container
+    profile), so a test that forgets to stub it would otherwise quietly
+    start a real Matter build on the machine running pytest. Every seam
+    that could start a real process is closed — the container runtime's
+    two impure operations (:class:`~mcuhome.workbench.containerbuild.Runtime`
+    driving ``docker``) and the subprocess profile's one child-process
+    launch — so neither path can escape. Tests that want a working build
+    replace these with their own stub, which wins because their
     monkeypatch is applied later.
     """
 
-    def refuse(command, env):
-        raise AssertionError(f"a test tried to run {command[0]!r}: stage 5 must be stubbed")
+    def refuse_run(self, argv, on_line=None):
+        raise AssertionError(f"a test tried to run {argv[0]!r}: the seam must be stubbed")
 
-    def refuse_docker(argv, on_line=None):
-        raise AssertionError(f"a test tried to run docker {argv!r}: the seam must be stubbed")
+    def refuse_spawn(self, argv, on_line=None):
+        raise AssertionError(f"a test tried to run {argv[0]!r}: the seam must be stubbed")
 
-    monkeypatch.setattr(container, "_run_quiet", refuse)
-    monkeypatch.setattr(lb, "_run_command", refuse_docker)
+    def refuse_process(argv, *, env=None, cwd=None, on_line=None):
+        raise AssertionError(f"a test tried to run {argv[0]!r}: the seam must be stubbed")
+
+    monkeypatch.setattr(containerbuild.Runtime, "run", refuse_run)
+    monkeypatch.setattr(containerbuild.Runtime, "spawn", refuse_spawn)
+    monkeypatch.setattr(subprocessbuild, "spawn_process", refuse_process)
 
 
 @pytest.fixture(autouse=True)

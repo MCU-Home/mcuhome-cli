@@ -35,36 +35,41 @@ commands top-level, names deliberately explicit (``sign-firmware``, not
 ``sign`` — a future ``sign-ota-update`` may join). The stubs refuse in
 words rather than being missing, because both wait on platform work
 (our MCUboot serial recovery, vendor provisioning). The old flat
-spellings, ``--json``, ``--method``/``--server``/``--token``,
+spellings, ``--json``, ``--server``/``--token``,
 ``MCUHOME_BUILD_*`` and ``build-servers.toml`` retired with the same
 step, without aliases (pre-1.0, the E62 rule).
 
-``device build`` selects **where** to build through ADR 0023's ladder,
-most explicit wins: fully manual — ``--build-mode`` plus its
-mode-specific flags (``--build-server``/``--build-token`` for
-``remote``, ``--container-image`` for ``local``) — bypassing the builder
-list entirely; a named builder
-(``--builder NAME``); or the configured ``default_builder``, falling
-back to a plain ``local`` build. Builders are configuration (any layer
-of ADR 0022, merged by name), their credentials live in
-``secrets/build-server/<name>.yaml``, and the method vocabulary
-underneath (``local``/``remote``) stays the workbench's: a builder is
-configuration *about* a method, never a third method.
+``device build`` answers **where** a build runs on one axis and **how**
+the machine that runs it executes the work on the other. The target is
+``local`` or ``remote`` and is selected through a ladder, most explicit
+wins: ``--build-target`` plus its target-specific flags
+(``--build-server``/``--build-token`` for ``remote``) bypasses the
+builder list entirely; then a named builder (``--builder NAME``); then
+the configured ``default_builder``; then the ``build.target`` option.
+Builders are configuration (any layer, merged by name), their
+credentials live in ``secrets/build-server/<name>.yaml``, and the target
+vocabulary underneath stays the workbench's: a builder is configuration
+*about* a target, never a third target. The mode is ``container`` or
+``subprocess``, it describes **this** machine, and ``--build-mode`` sets
+the ``build.mode`` option for one invocation — a remote build has no
+mode of its own to state, because that machine's operator configured
+theirs.
 Whichever ran, what comes back is an **unsigned** image plus a build
-report, and one host-side step signs it (:func:`_sign_after_build`,
-E56) — so the private key is absent from every build on every method,
-not merely from the ones that happen to run elsewhere.
+report, and one host-side step signs it (:func:`_sign_after_build`) — so
+the private key is absent from every build at every target, not merely
+from the ones that happen to run elsewhere.
 
-``--sdk-sources`` serves ``local`` and ``remote`` alike (E65). Both
-create a build context, a context is content-addressed over the SDK
-package's hash, and the pin is therefore resolved *here* on either
-method — what differs is only who fetches the bytes afterwards and
-checks them against it. The flag sets the ``build.sdk_sources`` option of
-the configuration registry: ``MCUHOME_BUILD_SDK_SOURCES`` and the
-``build:`` section of the configuration files (project, user, system) set
-it too, through one resolution
-(:func:`mcuhome.workbench.api.resolve_settings`); ``--jobs`` is an option
-of the same registry.
+``--sdk-sources`` serves both targets. Both create a build context, a
+context is content-addressed over the SDK package's hash, and the pin is
+therefore resolved *here* either way — what differs is only who fetches
+the bytes afterwards and checks them against it. The flag sets the
+``build.sdk_sources`` option of the configuration registry:
+``MCUHOME_BUILD_SDK_SOURCES`` and the ``build:`` section of the
+configuration files (project, user, system) set it too, through one
+resolution (:func:`mcuhome.workbench.api.resolve_settings`);
+``--container-image`` overrides the image pin for one invocation, and
+what a build may spend on this machine is ``build.cpus`` and
+``build.memory``.
 ``config`` edits the same registry the build reads — ``print`` shows
 every effective value with its origin layer, ``set``/``unset`` edit one
 scope's file (``--project`` by default) through the round-trip editor,
@@ -123,13 +128,12 @@ import signal
 import sys
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from mcuhome.model import __version__ as model_version
 from mcuhome.model import export, ota, pairing, registry
-from mcuhome.model import jobs as jobs_module
 from mcuhome.model.errors import BuildError, ConfigError, MCUHomeError
 from mcuhome.model.model import DeviceModel, PairingModel
 from mcuhome.model.userpaths import expand
@@ -142,7 +146,7 @@ from mcuhome.workbench import (
     scaffold,
     signing,
 )
-from mcuhome.workbench import buildenv as container
+from mcuhome.workbench import containerbuild as container
 from mcuhome.workbench.loader import load_yaml_file
 from mcuhome.workbench.project import check_secret_file
 
@@ -241,31 +245,14 @@ def _settings(args: argparse.Namespace, project: api.Project | None) -> api.Sett
         # The mapping lives here because the flag belongs to this command
         # line, not to the registry.
         given["build.sdk_sources"] = tuple(expand(entry, env) for entry in sources)
-    if getattr(args, "jobs", None):
-        given["jobs"] = args.jobs
+    for attribute, name in (("build_target", "build.target"), ("build_mode", "build.mode")):
+        # The same mapping `--sdk-sources` needs, and for the same
+        # reason: the registry derives no flag for an option that states
+        # an area, so the spelling belongs to this command line.
+        value = getattr(args, attribute, None)
+        if value is not None:
+            given[name] = value
     return api.resolve_settings(project=project, env=env, args=given)
-
-
-def _resolve_jobs(settings: api.Settings) -> tuple[int, str]:
-    """Parallel build jobs and where the number came from.
-
-    The ``jobs`` option resolves through the registry like any other;
-    only its *default* is special — no layer said anything, so the
-    auto-detection (CPU count against available RAM) answers instead of
-    the declared ``1``, exactly as before the registry existed.
-    """
-    setting = settings.setting("jobs")
-    if setting.origin == "default":
-        resolved = jobs_module.resolve_jobs(env={}, cli_jobs=None)
-        return resolved.value, resolved.source
-    value = int(settings.value("jobs"))
-    if value < 1:
-        source = setting.source or setting.origin
-        raise ConfigError(
-            f"jobs must be at least 1 ({value}, from {source}, would build nothing at all).",
-            hint="one job is a serial build; more parallelize the compile",
-        )
-    return value, setting.origin
 
 
 # --------------------------------------------------------------------------
@@ -590,21 +577,6 @@ def _cmd_validate(args: argparse.Namespace, output: Output) -> int:
     return phases.EXIT_OK
 
 
-def _positive_int(text: str) -> int:
-    """``--jobs``'s type=: a whole number of parallel build jobs, at least 1."""
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(
-            f"--jobs wants a whole number of parallel build jobs, not {text!r}."
-        ) from None
-    if value < 1:
-        raise argparse.ArgumentTypeError(
-            f"--jobs must be at least 1 ({value} would build nothing at all)."
-        )
-    return value
-
-
 def _validate_build(args: argparse.Namespace, output: Output) -> list[MCUHomeError]:
     """``device build``'s validate phase: the argument shapes only it can check.
 
@@ -732,64 +704,80 @@ def _build_input(
     return model, args.build_dir or project.root / BUILD_DIR / model.device.name, project
 
 
-#: The manual rung's mode-specific flags, and the mode each belongs to
-#: (ADR 0023 §2). The single source :func:`_validate_build_selection`
-#: enforces: a mode flag without ``--build-mode`` — or beside the wrong
-#: mode — is an exit-2 refusal, never a silently ignored word.
-_MODE_FLAGS: tuple[tuple[str, str, str], ...] = (
-    ("build_server", "--build-server", api.REMOTE),
-    ("build_token", "--build-token", api.REMOTE),
-    ("container_image", "--container-image", api.LOCAL),
+#: The flags that belong to one target, and the target each belongs to.
+#: The single source :func:`_validate_build_selection` enforces: such a
+#: flag without ``--build-target`` — or beside the wrong target — is an
+#: exit-2 refusal, never a silently ignored word.
+#:
+#: ``--container-image`` is deliberately not among them: it pins the
+#: image for one invocation and means the same thing at both targets, so
+#: it belongs to no rung.
+_TARGET_FLAGS: tuple[tuple[str, str, str], ...] = (
+    ("build_server", "--build-server", api.TARGET_REMOTE),
+    ("build_token", "--build-token", api.TARGET_REMOTE),
 )
 
 
 def _validate_build_selection(args: argparse.Namespace) -> list[MCUHomeError]:
-    """The builder-selection flag rules, checked before anything runs.
+    """The target-selection flag rules, checked before anything runs.
 
-    ADR 0023 §2 has three rungs and they do not mix: ``--build-mode``
-    is the fully manual one and owns the mode-specific flags;
-    ``--builder`` and the configured default take a builder *whole*.
-    Everything here is argument shape — read-only, instant, exit 2.
+    The rungs do not mix: ``--build-target`` names the target outright
+    and owns the target-specific flags; ``--builder`` and the configured
+    default take a builder *whole*. Everything here is argument shape —
+    read-only, instant, exit 2.
     """
     problems: list[MCUHomeError] = []
-    mode = getattr(args, "build_mode", None)
-    if mode is not None and getattr(args, "builder", None) is not None:
+    target = getattr(args, "build_target", None)
+    if target is not None and getattr(args, "builder", None) is not None:
         problems.append(
             ConfigError(
-                "--builder selects a configured builder and --build-mode builds "
-                "fully manually — one or the other, not both.",
+                "--builder selects a configured builder and --build-target names "
+                "where to build outright — one or the other, not both.",
                 hint=(
-                    "a named builder brings its own server or image with it; to "
-                    "override one of those, use --build-mode with the mode's own "
+                    "a named builder brings its own server with it; to build "
+                    "somewhere else once, use --build-target with the target's own "
                     "flags instead"
                 ),
             )
         )
-    for attribute, flag, wanted in _MODE_FLAGS:
+    for attribute, flag, wanted in _TARGET_FLAGS:
         if getattr(args, attribute, None) is None:
             continue
-        if mode is None:
+        if target is None:
             problems.append(
                 ConfigError(
-                    f"{flag} belongs to the fully manual rung: it needs --build-mode {wanted}.",
+                    f"{flag} belongs to a build that names its target: it needs "
+                    f"--build-target {wanted}.",
                     hint=(
-                        "without --build-mode the build uses a configured builder "
+                        "without --build-target the build uses a configured builder "
                         "(--builder NAME, or the default_builder), and a builder "
                         "carries these values itself"
                     ),
                 )
             )
-        elif mode != wanted:
+        elif target != wanted:
             problems.append(
                 ConfigError(
-                    f"{flag} is a --build-mode {wanted} flag, and this build's mode is {mode}.",
-                    hint="drop the flag, or change the mode it belongs to",
+                    f"{flag} is a --build-target {wanted} flag, and this build's "
+                    f"target is {target}.",
+                    hint="drop the flag, or change the target it belongs to",
                 )
             )
-    if mode == api.REMOTE and getattr(args, "build_server", None) is None:
+    if target == api.TARGET_REMOTE and getattr(args, "build_mode", None) is not None:
         problems.append(
             ConfigError(
-                "--build-mode remote needs --build-server.",
+                "--build-mode says how this machine executes a build, and this "
+                "build runs on a build server.",
+                hint=(
+                    "how that machine builds is its operator's decision — drop "
+                    "--build-mode, or build here with --build-target local"
+                ),
+            )
+        )
+    if target == api.TARGET_REMOTE and getattr(args, "build_server", None) is None:
+        problems.append(
+            ConfigError(
+                "--build-target remote needs --build-server.",
                 hint=(
                     "name the build server's address (IP or hostname[:port]) — or "
                     "configure a remote builder once and select it with --builder"
@@ -805,32 +793,40 @@ def _select_build(
     project: api.Project | None,
     output: Output,
 ) -> api.SelectedBuilder:
-    """Where this build runs: the three rungs of ADR 0023 §2.
+    """Where this build runs: the rungs of the selection ladder.
 
-    The fully manual rung (``--build-mode`` plus its mode-specific
-    flags) bypasses the builder list entirely; otherwise the workbench
-    resolves an explicit ``--builder`` name, the configured
-    ``default_builder``, or the built-in ``local`` fallback — the remote
-    builder's token read from ``secrets/build-server/<name>.yaml`` on
-    the way. The flag pairing rules ran in the validate phase
+    ``--build-target`` plus its target-specific flags bypasses the
+    builder list entirely; otherwise the workbench resolves an explicit
+    ``--builder`` name, the configured ``default_builder``, or the
+    ``build.target`` option — the remote builder's token read from
+    ``secrets/build-server/<name>.yaml`` on the way. The flag pairing
+    rules ran in the validate phase
     (:func:`_validate_build_selection`), so this function only selects.
+
+    ``--container-image`` is not part of the selection and is applied
+    afterwards, on whatever rung answered: it pins the image for this
+    one invocation, which is a more explicit statement than a builder's
+    configured one and beats it.
     """
     env = _process_env()
-    mode = getattr(args, "build_mode", None)
-    if mode is not None:
-        return api.SelectedBuilder(
-            method=api.resolve_method(mode),
+    target = getattr(args, "build_target", None)
+    if target is not None:
+        selected = api.SelectedBuilder(
+            target=api.resolve_build_target(target),
             server=args.build_server,
             token=args.build_token,
-            image=args.container_image,
         )
-    return api.resolve_builder(
-        settings,
-        name=getattr(args, "builder", None),
-        project=project,
-        env=env,
-        on_warning=output.warn,
-    )
+    else:
+        selected = api.resolve_builder(
+            settings,
+            name=getattr(args, "builder", None),
+            project=project,
+            env=env,
+            on_warning=output.warn,
+        )
+    if args.container_image is not None:
+        return replace(selected, image=args.container_image)
+    return selected
 
 
 def _print_log_tail(view: object, log_path: Path) -> None:
@@ -852,24 +848,24 @@ def _print_log_tail(view: object, log_path: Path) -> None:
         pass
 
 
-def _run_method(request: api.BuildRequest, *, method: str) -> api.BuildOutcome:
-    """Run one build method and wait for it.
+def _run_at_target(request: api.BuildRequest, *, target: str) -> api.BuildOutcome:
+    """Run one build at one target and wait for it.
 
-    The one place the command line crosses the async boundary (E53's
-    lead-engineer note): the three build methods are awaitable because
-    ``remote`` drives a socket and the other two block for minutes, and a
-    command line owns its event loop, so it wraps the whole build in a
-    single :func:`asyncio.run` and its user sees no difference.
+    The one place the command line crosses the async boundary: a build is
+    awaitable because ``remote`` drives a socket and a local one blocks
+    for minutes, and a command line owns its event loop, so it wraps the
+    whole build in a single :func:`asyncio.run` and its user sees no
+    difference.
     """
-    return asyncio.run(api.run_build(request, method=method))
+    return asyncio.run(api.run_build(request, target=target))
 
 
 def _cmd_build(args: argparse.Namespace, output: Output) -> int:
     model, out_dir, project = _build_input(args, output)
     settings = _settings(args, project)
     selection = _select_build(args, settings, project, output)
-    method = selection.method
-    output.start("build", device=model.device.name, method=method)
+    target = selection.target
+    output.start("build", device=model.device.name, target=target)
     # The whole command holds the build directory, not just the compile:
     # generating the tree, collecting the artifacts and signing the image
     # all write files a second run would be overwriting underneath.
@@ -881,7 +877,6 @@ def _cmd_build(args: argparse.Namespace, output: Output) -> int:
             project=project,
             settings=settings,
             selection=selection,
-            method=method,
             output=output,
         )
 
@@ -894,7 +889,6 @@ def _build_holding_the_directory(
     project: api.Project | None,
     settings: api.Settings,
     selection: api.SelectedBuilder,
-    method: str,
     output: Output,
 ) -> int:
     # Stage 4 on this machine runs for --generate-only and for nothing
@@ -1125,14 +1119,14 @@ def _build_delivered(
     selection: api.SelectedBuilder,
     output: Output,
 ) -> int:
-    """The two container-shaped methods: build elsewhere, sign on the host.
+    """Both targets: build elsewhere, sign on the host.
 
-    ``local`` (the default, E54) and ``remote`` are one function because
-    from here they are one thing: a build environment receives the device
-    model and the **public** signing key, generates and compiles from them
-    through the build-container ABI, and *delivers* an unsigned image plus
-    the §7.2.1 build report. Whether that environment was a container this
-    machine started or one a build server started is
+    ``local`` (the default) and ``remote`` are one function because from
+    here they are one thing: a build environment receives the device
+    model and the **public** signing key, generates and compiles from
+    them, and *delivers* an unsigned image plus the build report.
+    Whether that environment was a container this machine started, a
+    child process it started, or one a build server started is
     :func:`mcuhome.workbench.api.run_build`'s business, and it
     answers both in one shape.
 
@@ -1145,14 +1139,13 @@ def _build_delivered(
     """
     env = _process_env()
     out_dir = out_dir.resolve()
-    method = selection.method
     public_key, key = _resolve_build_key(args, project)
     # Only the public half ever reaches the build environment. Derived from
     # the private key on the signing path, taken verbatim from --public-key
     # on the detached one — never the private half, on either.
     signing_pub = _public_pem_for_context(public_key, key)
-    jobs, jobs_source = _resolve_jobs(settings)
-    remote = method == api.REMOTE
+    target = selection.target
+    remote = target == api.TARGET_REMOTE
     server, token = (selection.server, selection.token) if remote else (None, None)
     # The `build` section of this machine's configuration, resolved once
     # here and handed to the build: it decides what a local build runs in,
@@ -1182,7 +1175,6 @@ def _build_delivered(
             # runs in is decided a moment later, against a registry, and
             # the build environment step says what it turned out to be.
             print(f"  {output.muted('image')} {selection.image}")
-        print(f"  {output.muted('jobs')} {jobs} {output.muted(f'({jobs_source})')}")
         print(_key_note(key, public_key, output))
         print()
     sys.stdout.flush()
@@ -1240,12 +1232,11 @@ def _build_delivered(
         # A hidden scratch area under the build directory: the context and
         # the session tree live here and are rebuilt each run; the durable
         # artifacts are copied up into out_dir below.
-        outcome = _run_method(
+        outcome = _run_at_target(
             api.BuildRequest(
                 model=model,
                 out_dir=out_dir,
                 env=env,
-                jobs=jobs,
                 signing_pub=signing_pub,
                 sdk_sources=settings.value("build.sdk_sources"),
                 # What this command line resolved, stated rather than
@@ -1254,11 +1245,16 @@ def _build_delivered(
                 # it none, from another notion of the project than the one
                 # this invocation settled on.
                 options=options,
+                # Stated as well as resolved: the options carry the mode
+                # this invocation asked for, and this field is what lets
+                # a refusal say that *this build* chose it rather than
+                # naming a configuration file nobody edited.
+                build_mode=args.build_mode,
                 # The override only. Which environment a build runs in is
                 # the device's own statement, resolved against a registry
                 # while the build runs — so there is nothing to work out
-                # here, and `--container-image` means the same thing on
-                # both methods: pin this one instead.
+                # here, and `--container-image` means the same thing at
+                # both targets: pin this one instead.
                 image=selection.image,
                 # Where this machine keeps its compiler cache. Unset
                 # everywhere means the user's cache directory, which is
@@ -1283,7 +1279,7 @@ def _build_delivered(
                 on_step=on_step,
                 on_wait=on_wait,
             ),
-            method=method,
+            target=target,
         )
         if not outcome.successful:
             raise _delivered_build_failed(outcome, local_where=local_where)
@@ -1376,9 +1372,9 @@ def _collect_delivered_artifacts(
 
     A build environment delivers into a per-invocation directory that is
     wiped on the next build; the durable copies a user flashes and signs
-    belong in the build directory itself. Only the artifacts the method
+    belong in the build directory itself. Only the artifacts the build
     declared and verified (:attr:`…api.BuildOutcome.artifacts`)
-    are copied — nothing undeclared rides along, on either method.
+    are copied — nothing undeclared rides along, at either target.
     """
     copied: list[tuple[str, str, Path]] = []
     if outcome.out_dir is None:
@@ -1397,7 +1393,7 @@ def _delivered_build_failed(outcome: api.BuildOutcome, *, local_where: str) -> B
 
     Two voices speak here and both are quoted. ``problems`` is the
     *backend's* judgement — which §5.3 condition failed. The result
-    document (or, on the remote method, the verdict's error envelope) is
+    document (or, at the remote target, the verdict's error envelope) is
     the *program's* account of itself: ``reason``, the §5.4 error message
     and its details. A program that refuses before it runs anything writes
     only that document and not a line of build log, so dropping it here
@@ -1410,8 +1406,8 @@ def _delivered_build_failed(outcome: api.BuildOutcome, *, local_where: str) -> B
     diagnosis of a failure is the worst place to name the wrong one. It
     has no default for the same reason.
     """
-    # The local method's detail wraps the backend outcome; the remote
-    # method's *is* the outcome. Both carry the same §5.4 vocabulary.
+    # A local build's detail wraps the backend outcome; a remote
+    # build's *is* the outcome. Both carry the same vocabulary.
     inner = getattr(outcome.detail, "outcome", outcome.detail)
     problems = "; ".join(getattr(inner, "problems", ()) or ()) or (
         f"the build reported {outcome.status!r} and no usable result"
@@ -1430,7 +1426,7 @@ def _delivered_build_failed(outcome: api.BuildOutcome, *, local_where: str) -> B
     if details:
         said.append(json.dumps(details, sort_keys=True))
     account = f" The program said: {' — '.join(said)}" if said else ""
-    where = "on a build server" if outcome.method == api.REMOTE else local_where
+    where = "on a build server" if outcome.target == api.TARGET_REMOTE else local_where
     return BuildError(
         f"The firmware did not build: {problems}.{account}",
         hint=(
@@ -1540,9 +1536,9 @@ def _sign_after_build(
     report: str,
     project: api.Project | None = None,
 ) -> _Signed:
-    """The one host-side signing step, for every build method (E56).
+    """The one host-side signing step, for every build.
 
-    Every method delivers an **unsigned** image, and exactly one place
+    Every build delivers an **unsigned** image, and exactly one place
     turns it into a flashable one — this function. ``local`` and
     ``remote`` both reach it with the same four arguments, and the
     private key enters the story here and nowhere earlier, which is what
@@ -2714,37 +2710,68 @@ def _cmd_doctor(args: argparse.Namespace, output: Output) -> int:
             record("builders", "fail", error.message)
         else:
             configured_builders = settings.value("builders")
+            options = api.build_options(settings)
+            # Where a plain build runs and how it is executed, on the one
+            # line that answers "what happens when I type mcuhome device
+            # build": the two axes are two keys, and a person reading a
+            # diagnosis wants both words rather than one of them.
+            plainly = (
+                _("a plain build runs on a build server")
+                if options.target == api.TARGET_REMOTE
+                else _("a plain build runs on this machine, {mode}").format(
+                    mode=(
+                        _("in a build container")
+                        if options.mode == api.MODE_CONTAINER
+                        else _("as a child process")
+                    )
+                )
+            )
             if not configured_builders:
-                detail = _("none configured — a plain build runs on this machine")
+                detail = _("none configured — {plainly}").format(plainly=plainly)
             else:
                 listed = ", ".join(
                     f"{item.name} ({item.type}, {item.layer})" for item in configured_builders
                 )
                 default = settings.value("default_builder")
-                detail = f"{listed}; default: {default or _('built-in local')}"
+                detail = f"{listed}; default: {default or plainly}"
             if complaints:
                 detail += "\n" + "\n".join(complaints)
             record("builders", "warn" if complaints else "ok", detail)
 
-    docker = container.docker_program(env)
-    reference = container.environment_reference(env)
-    try:
-        container.preflight(docker, env=env)
-    except MCUHomeError as error:
-        record("container", "fail", error.message)
-    else:
-        # Which image, deliberately not checked here: a build environment
-        # is chosen per device, out of what that device's SDK needs, and
-        # is fetched when it is missing. What a machine-wide check can say
-        # is that a container runtime is there and where environments come
-        # from by default.
+    if settings is not None and api.build_options(settings).mode == api.MODE_SUBPROCESS:
+        # No container runtime is asked for: this machine is configured
+        # to build against the environment MCUHome unpacked here, and a
+        # missing docker is not a finding on it.
         record(
             "container",
             "ok",
-            _("{docker} answers; build environments come from {image}").format(
-                docker=docker, image=reference
-            ),
+            _("not used — build.mode is {mode}").format(mode=api.MODE_SUBPROCESS),
         )
+    else:
+        docker = container.docker_program(env)
+        repositories = (
+            api.build_options(settings).container_repositories
+            if settings is not None
+            else api.BuildOptions().container_repositories
+        )
+        try:
+            container.preflight(container.Runtime(docker), env=env)
+        except MCUHomeError as error:
+            record("container", "fail", error.message)
+        else:
+            # Which image, deliberately not checked here: a build
+            # environment is chosen per device, out of the packages that
+            # device's context pins, and is fetched when it is missing.
+            # What a machine-wide check can say is that a container
+            # runtime is there and which repositories one is looked for
+            # in.
+            record(
+                "container",
+                "ok",
+                _("{docker} answers; build environments are searched in {repositories}").format(
+                    docker=docker, repositories=", ".join(repositories)
+                ),
+            )
 
     record("compiler cache", *_cache_verdict(settings, env))
 
@@ -3140,7 +3167,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     config_get_parser = config_sub.add_parser("get", help="one option's effective value")
     config_get_parser.add_argument(
-        "name", help="the option, spelled as its configuration key (e.g. jobs)"
+        "name", help="the option, spelled as its configuration key (e.g. build.mode)"
     )
     finish_options(config_get_parser, output=True)
     config_get_parser.set_defaults(func=_cmd_config_get)
@@ -3255,10 +3282,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="stop after writing the generated application, and succeed",
     )
-    # ADR 0023: where a build runs. Three rungs, most explicit wins —
-    # fully manual (--build-mode plus its mode flags), a named builder,
-    # the configured default. A builder is configuration about a method,
-    # never a third method.
+    # Where a build runs, and how the machine that runs it executes the
+    # work. The target has a ladder, most explicit wins: --build-target
+    # plus its target flags, a named builder, the configured default,
+    # the build.target option. A builder is configuration about a
+    # target, never a third target. The mode is one option of this
+    # machine's configuration and --build-mode sets it for one build.
     build_parser_.add_argument(
         "--builder",
         metavar="NAME",
@@ -3271,16 +3300,29 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     build_parser_.add_argument(
-        "--build-mode",
-        metavar="MODE",
-        choices=api.METHODS,
+        "--build-target",
+        metavar="TARGET",
+        choices=api.BUILD_TARGETS,
         default=None,
         help=(
-            "build fully manually in this mode, bypassing the builders "
-            "configuration: "
-            + ", ".join(api.METHODS)
+            "build here or there, bypassing the builders configuration: "
+            + ", ".join(api.BUILD_TARGETS)
             + " — local compiles on this machine, remote on a build server; "
-            "each mode has its own flags below"
+            "each target has its own flags below. Sets the "
+            f"{option_env_var('build.target')} option for this build"
+        ),
+    )
+    build_parser_.add_argument(
+        "--build-mode",
+        metavar="MODE",
+        choices=api.BUILD_MODES,
+        default=None,
+        help=(
+            "how this machine executes a local build: "
+            + ", ".join(api.BUILD_MODES)
+            + f" — a build container, or the build environment MCUHome unpacked "
+            f"here, run as a child process. Sets the {option_env_var('build.mode')} "
+            "option for this build; a remote build has no mode of its own to state"
         ),
     )
     build_parser_.add_argument(
@@ -3288,7 +3330,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ADDRESS",
         default=None,
         help=(
-            "--build-mode remote: the build server's address, IP or "
+            "--build-target remote: the build server's address, IP or "
             "hostname[:port] (a configured builder carries its own)"
         ),
     )
@@ -3297,7 +3339,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOKEN",
         default=None,
         help=(
-            "--build-mode remote: bearer token for that server (a configured "
+            "--build-target remote: bearer token for that server (a configured "
             "builder reads secrets/build-server/<name>.yaml instead)"
         ),
     )
@@ -3327,11 +3369,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     build_parser_.add_argument(
         "--container-image",
-        metavar="REF",
+        metavar="PIN",
         default=None,
         help=(
-            f"--build-mode local: container image to compile in (default: {container.IMAGE}; "
-            f"the {container.IMAGE_VAR} environment variable sets it too)"
+            "pin the build environment for this one build: a repository, :tag, "
+            "@sha256:... or a repository with either. Overrides the device's "
+            "sources.container_image, and works at both targets — a local "
+            "container build resolves it against build.container_repositories, a "
+            "remote build hands it to the server. Unset, the image is found by the "
+            "packages its labels declare"
         ),
     )
     build_parser_.add_argument(
@@ -3340,9 +3386,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=(
             "directory holding the hash-pinned MCUHome SDK package this build is "
-            "pinned to (repeatable; searched in order). Needed by the local and "
-            "remote modes alike — both create a build context, and the pin is "
-            "part of its identity. An option of the configuration registry: "
+            "pinned to (repeatable; searched in order). Needed at both targets — "
+            "both create a build context, and the pin is part of its identity. "
+            "An option of the configuration registry: "
             f"{option_env_var('build.sdk_sources')} is a PATH-style list of "
             "them, and the configuration files take a `sdk_sources:` list "
             "under `build:`"
@@ -3378,18 +3424,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "public half of the signing key, compiled into the bootloader "
             "(required with --no-sign; write one with mcuhome public-key)"
-        ),
-    )
-    build_parser_.add_argument(
-        "--jobs",
-        type=_positive_int,
-        default=None,
-        metavar="N",
-        help=(
-            "parallel build jobs (default: auto-detected from CPU count and "
-            "available RAM). An option of the configuration registry: "
-            f"{option_env_var('jobs')} and the configuration files set it too, "
-            "--jobs beats them all"
         ),
     )
     finish_options(build_parser_, output=True)

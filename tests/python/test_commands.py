@@ -35,42 +35,49 @@ def _project_with_device(tmp_path: Path) -> Path:
 
 
 def test_config_set_get_print_unset_round_trip(tmp_path, capsys, monkeypatch) -> None:
-    """One value through all four verbs, in the project scope (the default)."""
+    """One value through all four verbs, in the project scope (the default).
+
+    ``build.sdk_max_bytes`` stands in for the retired top-level ``jobs``
+    option: an integer, nested under ``build:`` — which is also what
+    proves a dotted key of one area writes that area's own section.
+    """
     project = _project_with_device(tmp_path)
     monkeypatch.chdir(project)
 
-    assert main(["config", "set", "jobs", "4"]) == 0
+    assert main(["config", "set", "build.sdk_max_bytes", "4096"]) == 0
     out = capsys.readouterr().out
-    assert "Set jobs = 4" in out
+    assert "Set build.sdk_max_bytes = 4096" in out
     assert "mcuhome.yaml" in out
-    assert "jobs: 4" in (project / "mcuhome.yaml").read_text(encoding="utf-8")
+    written = (project / "mcuhome.yaml").read_text(encoding="utf-8")
+    assert "build:" in written
+    assert "sdk_max_bytes: 4096" in written
 
-    assert main(["config", "get", "jobs"]) == 0
-    assert capsys.readouterr().out.strip() == "4"
+    assert main(["config", "get", "build.sdk_max_bytes"]) == 0
+    assert capsys.readouterr().out.strip() == "4096"
 
     assert main(["config", "print"]) == 0
     printed = capsys.readouterr().out
     assert "option" in printed and "origin" in printed
-    assert "jobs" in printed
+    assert "build.sdk_max_bytes" in printed
     assert "project" in printed
 
-    assert main(["config", "unset", "jobs"]) == 0
-    assert "Removed jobs" in capsys.readouterr().out
-    assert "jobs" not in (project / "mcuhome.yaml").read_text(encoding="utf-8")
+    assert main(["config", "unset", "build.sdk_max_bytes"]) == 0
+    assert "Removed build.sdk_max_bytes" in capsys.readouterr().out
+    assert "sdk_max_bytes" not in (project / "mcuhome.yaml").read_text(encoding="utf-8")
 
-    assert main(["config", "unset", "jobs"]) == 0
+    assert main(["config", "unset", "build.sdk_max_bytes"]) == 0
     assert "nothing changed" in capsys.readouterr().out
 
 
 def test_config_print_answers_json_with_origins(tmp_path, capsys, monkeypatch) -> None:
     project = _project_with_device(tmp_path)
     monkeypatch.chdir(project)
-    (project / "mcuhome.yaml").write_text("jobs: 3\n", encoding="utf-8")
+    (project / "mcuhome.yaml").write_text("build:\n  sdk_max_bytes: 4096\n", encoding="utf-8")
     assert main(["config", "print", "-o", "json"]) == 0
     document = json.loads(capsys.readouterr().out)
     assert document["ok"] is True
-    assert document["config"]["jobs"] == {
-        "value": 3,
+    assert document["config"]["build.sdk_max_bytes"] == {
+        "value": 4096,
         "origin": "project",
         "source": str(project / "mcuhome.yaml"),
     }

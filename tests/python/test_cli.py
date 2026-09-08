@@ -18,12 +18,11 @@ import pytest
 from conftest import EXAMPLES_DIR, FIXTURE_TREE, VALID_CONFIG, make_project
 from mcuhome.compiler.generate import APP_DIR
 from mcuhome.model import __version__ as model_version
-from mcuhome.model import buildimage
-from mcuhome.model import jobs as jobs_module
+from mcuhome.model.artifacts import Artifact
+from mcuhome.model.errors import BuildError
 from mcuhome.model.model import MODEL_VERSION
 from mcuhome.workbench import api, buildmethods, containerbuild, imgtool, sessionclient, signing
-from mcuhome.workbench import buildenv as container
-from mcuhome.workbench import orchestrator as lb
+from mcuhome.workbench.buildenvsession import LocalOutcome
 from mcuhome.workbench.project import Project
 
 from mcuhome.cli import __version__ as cli_version
@@ -57,7 +56,7 @@ REPORT = {
 #: What the scripted composition resolves its environment to — a real
 #: pin, because the lines the CLI prints about it are what these tests
 #: read back.
-FAKE_ENVIRONMENT = "ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10@sha256:" + "ab" * 32
+FAKE_ENVIRONMENT = "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1@sha256:" + "ab" * 32
 
 
 def _fake_local_run(model, **kwargs):
@@ -65,9 +64,9 @@ def _fake_local_run(model, **kwargs):
 
     Writes the unsigned firmware and the §7.2.1 build report into the
     per-invocation ``out`` the real backend would, and answers a successful
-    :class:`~mcuhome.workbench.orchestrator.LocalOutcome`. The private key is
-    deliberately not among the arguments a build ever receives — the whole
-    point of the local path — so this fake never sees one either.
+    :class:`~mcuhome.workbench.buildenvsession.LocalOutcome`. The private key
+    is deliberately not among the arguments a build ever receives — the
+    whole point of the local path — so this fake never sees one either.
     """
     if kwargs.get("on_step") is not None:
         # The real composition's step emissions, in its order: each step
@@ -91,7 +90,7 @@ def _fake_local_run(model, **kwargs):
             patches=[],
             id="sha256:" + "1" * 64,
         )
-        kwargs["on_step"]("compile", image=FAKE_ENVIRONMENT, jobs=kwargs.get("jobs"))
+        kwargs["on_step"]("compile", image=FAKE_ENVIRONMENT, cpus=4.0, memory_bytes=None)
     work_root = Path(kwargs["work_root"])
     out = work_root / "backend" / "inv" / "out"
     out.mkdir(parents=True, exist_ok=True)
@@ -106,10 +105,9 @@ def _fake_local_run(model, **kwargs):
         "build-report.json": "report",
     }
     artifacts = tuple(
-        lb.Artifact(root="out", path=name, role=role, sha256="0" * 64)
-        for name, role in roles.items()
+        Artifact(root="out", path=name, role=role, sha256="0" * 64) for name, role in roles.items()
     )
-    outcome = lb.LocalOutcome(
+    outcome = LocalOutcome(
         action="build",
         context_id="sha256:" + "1" * 64,
         exit_code=0,
@@ -118,38 +116,28 @@ def _fake_local_run(model, **kwargs):
         artifacts=artifacts,
         out=out,
     )
-    return containerbuild.LocalBuildResult(
+    return containerbuild.ContainerBuildResult(
         outcome=outcome,
         out_dir=out,
         context_dir=work_root / "context",
         # `image` is None unless the build named one, exactly as the real
         # composition receives it before resolving the default.
-        image=kwargs["image"] or container.IMAGE,
+        image=kwargs["image"] or FAKE_ENVIRONMENT,
     )
 
 
-def _recording_local_run(seen: dict):
-    """:func:`_fake_local_run`, with the arguments it was called with kept."""
-
-    def run(model, **kwargs):
-        seen.update(kwargs)
-        return _fake_local_run(model, **kwargs)
-
-    return run
-
-
-def _local_failure(outcome: lb.LocalOutcome) -> buildmethods.BuildOutcome:
+def _local_failure(outcome: LocalOutcome) -> buildmethods.BuildOutcome:
     """The dispatch's answer for a ``local`` build that ran and failed."""
     return buildmethods.BuildOutcome(
-        method=buildmethods.LOCAL,
+        target=buildmethods.TARGET_LOCAL,
         successful=False,
         status=outcome.status,
         context_id=outcome.context_id,
         artifacts=(),
         out_dir=None,
         report=imgtool.BUILD_REPORT_FILE,
-        detail=containerbuild.LocalBuildResult(
-            outcome=outcome, out_dir=Path("."), context_dir=Path("."), image=container.IMAGE
+        detail=containerbuild.ContainerBuildResult(
+            outcome=outcome, out_dir=Path("."), context_dir=Path("."), image=FAKE_ENVIRONMENT
         ),
     )
 
@@ -243,60 +231,6 @@ def test_unknown_device_exits_one(capsys) -> None:
     assert "no device called" in capsys.readouterr().err
 
 
-def test_build_uses_the_jobs_flag_and_reports_its_source(tmp_path, capsys, monkeypatch) -> None:
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
-    _fake_imgtool(monkeypatch, tmp_path)
-    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--jobs", "3"]
-    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
-    assert main(argv) == 0
-    assert seen["jobs"] == 3
-    assert "jobs 3 (arguments)" in capsys.readouterr().out
-
-
-def test_build_uses_the_environment_variable_when_no_flag_is_given(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
-    _fake_imgtool(monkeypatch, tmp_path)
-    monkeypatch.setenv(jobs_module.JOBS_VAR, "5")
-    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
-    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
-    assert main(argv) == 0
-    assert seen["jobs"] == 5
-    assert "jobs 5 (environment)" in capsys.readouterr().out
-
-
-def test_build_auto_detects_when_neither_flag_nor_environment_is_given(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    seen: dict[str, object] = {}
-    monkeypatch.setattr(buildmethods, "compose_local_build", _recording_local_run(seen))
-    _fake_imgtool(monkeypatch, tmp_path)
-    monkeypatch.delenv(jobs_module.JOBS_VAR, raising=False)
-    monkeypatch.setattr(jobs_module, "detect_jobs", lambda: 7)
-    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
-    argv += ["--no-sign", "--public-key", str(_public_key(tmp_path))]
-    assert main(argv) == 0
-    assert seen["jobs"] == 7
-    assert "jobs 7 (auto)" in capsys.readouterr().out
-
-
-def test_jobs_zero_is_a_plain_language_refusal(capsys) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main(["device", "build", str(EXAMPLE), "--jobs", "0"])
-    assert caught.value.code == 2
-    assert "--jobs must be at least 1" in capsys.readouterr().err
-
-
-def test_jobs_garbage_is_a_plain_language_refusal(capsys) -> None:
-    with pytest.raises(SystemExit) as caught:
-        main(["device", "build", str(EXAMPLE), "--jobs", "nope"])
-    assert caught.value.code == 2
-    assert "whole number of parallel build jobs" in capsys.readouterr().err
-
-
 def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     tmp_path, capsys, monkeypatch
 ) -> None:
@@ -326,7 +260,7 @@ def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     out = capsys.readouterr().out
     # The environment is resolved while the build runs, so the header
     # names no image and the step line does.
-    assert "build environment ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10" in out
+    assert "build environment ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1" in out
     assert "Built bmp180-node." in out
     # The unsigned image the container delivered was copied up, and the
     # host signed it beside it.
@@ -373,7 +307,7 @@ def test_the_local_build_prints_the_footprint_from_the_report(
     # The steps say what they established, and the lines stay (PO 2026-08-16).
     assert "validate  nrf7002dk/nrf5340/cpuapp · Thread router · Matter on" in out
     assert (
-        "build environment ghcr.io/mcu-home/build-container:zephyr-4.4.0-r10 · "
+        "build environment ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1 · "
         "digest abababababab · Zephyr 4.4.0 · found under zephyr-4.4-latest" in out
     )
     # The context line does not repeat the container: the step above it
@@ -487,7 +421,7 @@ def test_the_image_can_be_named_per_build(tmp_path, capsys, monkeypatch) -> None
     monkeypatch.setattr(buildmethods, "compose_local_build", capture)
     _fake_imgtool(monkeypatch, tmp_path)
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
-    argv += ["--build-mode", "local", "--container-image", "localhost/b:wip"]
+    argv += ["--build-target", "local", "--container-image", "localhost/b:wip"]
     argv += ["--signing-key", str(_private_key(tmp_path))]
     assert main(argv) == 0
     assert seen["image"] == "localhost/b:wip"
@@ -498,7 +432,7 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
     """The local path's image-not-found is a typed refusal, not a crash."""
 
     def refuse(model, **kwargs):
-        raise containerbuild.lb.BuildError(
+        raise BuildError(
             f"The build container {kwargs['image']} is missing on this host.",
             hint="pull the image, then rerun the build",
         )
@@ -527,35 +461,16 @@ def test_a_missing_image_is_a_plain_refusal_not_a_traceback(tmp_path, capsys, mo
 def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) -> None:
     """No --sdk-sources through any channel: a typed refusal, no docker.
 
-    The environment resolves — the reference is pinned and the image is
-    on this host, so nothing is asked of a registry either — and then the
-    SDK pin cannot, which is the refusal E54 asks be surfaced cleanly
-    rather than as a traceback. No container is ever started.
+    The build context is what pins the SDK, and it is created *before*
+    the container backend ever looks at an image — so this refusal fires
+    before any container runtime is touched, and there is nothing to fake
+    about the image at all.
     """
-    pinned_digest = "sha256:" + "1" * 64
 
-    def local_docker(argv, on_line=None):
-        if argv[1] == "version":
-            return lb.Completed(0, "28.0.0")
-        if argv[1:3] == ["image", "inspect"]:
-            # The labels are part of resolving: an image that does not say
-            # what it carries is refused before the SDK is ever looked
-            # for, which would be a different refusal than this one.
-            facts = {
-                "Id": "sha256:" + "f" * 64,
-                "RepoDigests": [f"{container.DEFAULT_ENVIRONMENT}@{pinned_digest}"],
-                "Config": {
-                    "Labels": {
-                        buildimage.CONTRACT_LABEL: "1",
-                        buildimage.ZEPHYR_LABEL: "4.4.0",
-                        buildimage.TOOLCHAIN_LABEL: "zephyr-sdk-1.0.1",
-                    }
-                },
-            }
-            return lb.Completed(0, json.dumps(facts))
+    def no_container(self, argv, on_line=None):
         raise AssertionError(f"no container should start: {argv}")
 
-    monkeypatch.setattr(lb, "_run_command", local_docker)
+    monkeypatch.setattr(containerbuild.Runtime, "run", no_container)
 
     assert (
         main(
@@ -565,13 +480,6 @@ def test_a_missing_sdk_source_is_a_clean_refusal(tmp_path, capsys, monkeypatch) 
                 str(EXAMPLE),
                 "--build-dir",
                 str(tmp_path),
-                # The fully manual rung, which is what --container-image
-                # belongs to — and the pin is what makes this test need
-                # neither a registry nor a network.
-                "--build-mode",
-                "local",
-                "--container-image",
-                f"{container.DEFAULT_ENVIRONMENT}:zephyr-4.4.0-r10@{pinned_digest}",
                 "--signing-key",
                 str(_private_key(tmp_path)),
             ]
@@ -1364,7 +1272,7 @@ def test_a_failed_container_build_quotes_the_programs_own_account():
     and dropping it once reduced a precise in-container refusal to
     "status 'failure'; exited 1" in CI.
     """
-    outcome = lb.LocalOutcome(
+    outcome = LocalOutcome(
         action="build",
         context_id="sha256:" + "1" * 64,
         exit_code=1,
@@ -1396,7 +1304,7 @@ def test_a_failed_container_build_quotes_the_programs_own_account():
 
 def test_a_failed_container_build_without_a_document_stays_terse():
     """No result document, no invented account — the judgement stands alone."""
-    outcome = lb.LocalOutcome(
+    outcome = LocalOutcome(
         action="build",
         context_id="",
         exit_code=137,
@@ -1420,7 +1328,7 @@ def test_a_failed_remote_build_quotes_the_verdicts_error_envelope():
     user reads must carry it just the same, out of the one renderer.
     """
     outcome = buildmethods.BuildOutcome(
-        method=buildmethods.REMOTE,
+        target=buildmethods.TARGET_REMOTE,
         successful=False,
         status="failure",
         context_id="sha256:" + "2" * 64,
@@ -1452,7 +1360,7 @@ def test_a_failed_remote_build_quotes_the_verdicts_error_envelope():
 def _selection_args(**overrides) -> argparse.Namespace:
     """The parsed ``device build`` arguments the selection reads."""
     values = {
-        "build_mode": None,
+        "build_target": None,
         "builder": None,
         "build_server": None,
         "build_token": None,
@@ -1466,29 +1374,29 @@ def test_the_selection_ladder_ends_at_the_local_container() -> None:
     """No flags, no configuration: the fallback is a plain local build (E54)."""
     settings = cli.api.resolve_settings(project=None, env={})
     selection = cli._select_build(_selection_args(), settings, None, Output())
-    assert selection.method == buildmethods.LOCAL
+    assert selection.target == buildmethods.TARGET_LOCAL
     assert selection.builder is None
 
 
-def test_the_manual_rung_carries_the_mode_flags_verbatim(tmp_path) -> None:
-    """--build-mode plus its flags bypasses the builder list (ADR 0023 §2)."""
+def test_the_manual_rung_carries_the_target_flags_verbatim(tmp_path) -> None:
+    """--build-target plus its flags bypasses the builder list (ADR 0023 §2)."""
     settings = cli.api.resolve_settings(project=None, env={})
     selection = cli._select_build(
-        _selection_args(build_mode="remote", build_server="10.0.0.5:8291", build_token="t"),
+        _selection_args(build_target="remote", build_server="10.0.0.5:8291", build_token="t"),
         settings,
         None,
         Output(),
     )
-    assert selection.method == buildmethods.REMOTE
+    assert selection.target == buildmethods.TARGET_REMOTE
     assert (selection.server, selection.token) == ("10.0.0.5:8291", "t")
     assert selection.builder is None
     local = cli._select_build(
-        _selection_args(build_mode="local", container_image="ghcr.io/x:y"),
+        _selection_args(build_target="local", container_image="ghcr.io/x:y"),
         settings,
         None,
         Output(),
     )
-    assert local.method == buildmethods.LOCAL
+    assert local.target == buildmethods.TARGET_LOCAL
     assert local.image == "ghcr.io/x:y"
 
 
@@ -1505,19 +1413,31 @@ def test_native_is_gone_and_is_now_an_unknown_argument(tmp_path, capsys) -> None
     assert "unrecognized arguments: --native" in capsys.readouterr().err
 
 
+def test_an_unknown_target_is_an_argparse_refusal(tmp_path, capsys) -> None:
+    """--build-target has exactly the targets there are; a typo is exit 2."""
+    argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path)]
+    argv += ["--build-target", "cloud"]
+    with pytest.raises(SystemExit) as caught:
+        main(argv)
+    assert caught.value.code == 2
+    err = capsys.readouterr().err
+    for name in buildmethods.BUILD_TARGETS:
+        assert name in err
+
+
 def test_an_unknown_mode_is_an_argparse_refusal(tmp_path, capsys) -> None:
-    """--build-mode has exactly the methods there are; a typo is exit 2."""
+    """--build-mode has exactly the modes there are; a typo is exit 2."""
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--build-mode", "cloud"]
     with pytest.raises(SystemExit) as caught:
         main(argv)
     assert caught.value.code == 2
     err = capsys.readouterr().err
-    for name in buildmethods.METHODS:
+    for name in buildmethods.BUILD_MODES:
         assert name in err
 
 
 def _no_build_may_start(monkeypatch) -> None:
-    async def explode(request, *, method):
+    async def explode(request, *, target):
         raise AssertionError("validate failed, so the build must never start")
 
     monkeypatch.setattr(cli.api, "run_build", explode)
@@ -1526,13 +1446,15 @@ def _no_build_may_start(monkeypatch) -> None:
 @pytest.mark.parametrize(
     ("extra", "said"),
     [
-        (["--builder", "attic", "--build-mode", "local"], "one or the other"),
-        (["--build-server", "10.0.0.5"], "needs --build-mode remote"),
-        (["--build-token", "t"], "needs --build-mode remote"),
-        (["--container-image", "ref"], "needs --build-mode local"),
-        (["--build-mode", "remote", "--container-image", "ref"], "--build-mode local flag"),
-        (["--build-mode", "remote"], "needs --build-server"),
-        (["--build-mode", "local", "--build-server", "x"], "--build-mode remote flag"),
+        (["--builder", "attic", "--build-target", "local"], "one or the other"),
+        (["--build-server", "10.0.0.5"], "needs --build-target remote"),
+        (["--build-token", "t"], "needs --build-target remote"),
+        (
+            ["--build-target", "remote", "--build-mode", "container", "--build-server", "x"],
+            "this build runs on a build server",
+        ),
+        (["--build-target", "remote"], "needs --build-server"),
+        (["--build-target", "local", "--build-server", "x"], "--build-target remote flag"),
     ],
 )
 def test_selection_flags_that_do_not_pair_are_usage_errors(
@@ -1570,7 +1492,7 @@ def _project_with_remote_builder(tmp_path: Path, *, token_mode: int = 0o600) -> 
 def _capture_requests(monkeypatch) -> list:
     seen: list[buildmethods.BuildRequest] = []
 
-    async def refuse(request, *, method):
+    async def refuse(request, *, target):
         seen.append(request)
         raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
 
@@ -1801,10 +1723,10 @@ def test_a_build_without_a_configured_mode_still_carries_the_default(
     assert seen[0].options.mode == buildmethods.MODE_CONTAINER
 
 
-async def _delivered_nothing(request, *, method):
+async def _delivered_nothing(request, *, target):
     """A local build that comes back with nothing usable — a failed one."""
     return buildmethods.BuildOutcome(
-        method=buildmethods.LOCAL,
+        target=buildmethods.TARGET_LOCAL,
         successful=False,
         status="failure",
         context_id="sha256:" + "4" * 64,
@@ -1879,12 +1801,12 @@ def test_an_unknown_builder_is_a_refusal_listing_the_configured_ones(
     err = capsys.readouterr().err
     assert "attik" in err
     assert "attic" in err
-    assert "--build-mode" in err
+    assert "--build-target" in err
     assert "Traceback" not in err
 
 
 def test_the_manual_rung_bypasses_the_configured_default(tmp_path, capsys, monkeypatch) -> None:
-    """--build-mode local builds locally even when the default builder is remote."""
+    """--build-target local builds locally even when the default builder is remote."""
     project = _project_with_remote_builder(tmp_path)
     with (project / "mcuhome.yaml").open("a", encoding="utf-8") as handle:
         handle.write("default_builder: attic\n")
@@ -1896,7 +1818,7 @@ def test_the_manual_rung_bypasses_the_configured_default(tmp_path, capsys, monke
         "bench-node",
         "--project-dir",
         str(project),
-        "--build-mode",
+        "--build-target",
         "local",
         "--sdk-sources",
         str(tmp_path),
@@ -1979,7 +1901,7 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
         str(EXAMPLE),
         "--build-dir",
         str(tmp_path),
-        "--build-mode",
+        "--build-target",
         "remote",
         "--build-server",
         "ws://build.example/ws",
@@ -2006,7 +1928,7 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
     """
     seen: list[buildmethods.BuildRequest] = []
 
-    async def refuse(request, *, method):
+    async def refuse(request, *, target):
         seen.append(request)
         raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
 
@@ -2020,7 +1942,7 @@ def test_the_sdk_source_variable_reaches_a_remote_request_too(
         str(EXAMPLE),
         "--build-dir",
         str(tmp_path / "out"),
-        "--build-mode",
+        "--build-target",
         "remote",
         "--signing-key",
         str(_private_key(tmp_path)),
@@ -2043,10 +1965,10 @@ def _capture_signing(monkeypatch) -> list[dict]:
     return calls
 
 
-def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch) -> None:
-    """E56: one host-side signing step, reached identically by both.
+def test_every_target_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch) -> None:
+    """One host-side signing step, reached identically by both targets.
 
-    Each method is stubbed at its own backend seam — ``compose_local_build``
+    Each target is stubbed at its own backend seam — ``compose_local_build``
     for ``local`` and the dispatch itself for ``remote``, whose real
     composition (a session against a build server) is tested in the
     library's own suite. What is asserted is the same thing for both: the
@@ -2083,20 +2005,20 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     # here — see the module the refusal above points at.
     remote_dir = tmp_path / "remote"
 
-    async def delivered(request, *, method):
+    async def delivered(request, *, target):
         requests.append(request)
         out = tmp_path / "delivery"
         out.mkdir(exist_ok=True)
         (out / "firmware.bin").write_bytes(bytes(16))
         (out / imgtool.BUILD_REPORT_FILE).write_text(json.dumps(REPORT), "utf-8")
         return buildmethods.BuildOutcome(
-            method=buildmethods.REMOTE,
+            target=buildmethods.TARGET_REMOTE,
             successful=True,
             status="success",
             context_id="sha256:" + "3" * 64,
             artifacts=(
-                lb.Artifact(root="out", path="firmware.bin", role="firmware", sha256="0" * 64),
-                lb.Artifact(
+                Artifact(root="out", path="firmware.bin", role="firmware", sha256="0" * 64),
+                Artifact(
                     root="out", path=imgtool.BUILD_REPORT_FILE, role="report", sha256="1" * 64
                 ),
             ),
@@ -2113,7 +2035,7 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
         str(EXAMPLE),
         "--build-dir",
         str(remote_dir),
-        "--build-mode",
+        "--build-target",
         "remote",
         "--signing-key",
         str(_private_key(tmp_path)),
@@ -2134,13 +2056,13 @@ def test_every_method_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     assert [call["report"] for call in calls] == [imgtool.BUILD_REPORT_FILE] * 2
 
 
-def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeypatch) -> None:
-    """--no-sign skips the one step uniformly, rather than per method (E56)."""
+def test_no_sign_reaches_the_signing_step_at_either_target(tmp_path, capsys, monkeypatch) -> None:
+    """--no-sign skips the one step uniformly, rather than per target."""
     calls = _capture_signing(monkeypatch)
     public = _public_key(tmp_path)
 
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
-    for extra in (["--build-mode", "local"], []):
+    for extra in (["--build-target", "local"], []):
         argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path / "out")]
         argv += ["--no-sign", "--public-key", str(public), *extra]
         assert main(argv) == 0
@@ -2148,15 +2070,16 @@ def test_no_sign_reaches_the_signing_step_on_no_method(tmp_path, capsys, monkeyp
     assert calls == []
 
 
-def test_the_build_help_advertises_the_methods(capsys) -> None:
+def test_the_build_help_advertises_the_targets_and_modes(capsys) -> None:
     """The command surface is the one machine-facing promise this package makes."""
     assert main(["device", "build", "--help"]) == 0
     out = capsys.readouterr().out
-    for name in buildmethods.METHODS:
+    for name in buildmethods.BUILD_TARGETS:
         assert name in out
+    assert "--build-target" in out
     assert "--build-mode" in out
     assert "--build-server" in out
-    # E62: one spelling per method, and the old alias is not one of them.
+    # One spelling per target, and the old alias is not one of them.
     assert "--native" not in out
 
 
@@ -2231,7 +2154,7 @@ def test_a_full_build_streams_the_compile_and_sign_stages(tmp_path, capsys, monk
         "verb": "start",
         "task": "build",
         "device": "bmp180-node",
-        "method": "local",
+        "target": "local",
     }
     progress = [line for line in lines if line["verb"] == "progress"]
     # The stage sequence, with the repeats a step's own facts add folded
@@ -2328,7 +2251,7 @@ def test_the_wait_bounds_reach_the_build_request(tmp_path, monkeypatch, capsys) 
     """
     seen: list[buildmethods.BuildRequest] = []
 
-    async def refuse(request, *, method):
+    async def refuse(request, *, target):
         seen.append(request)
         raise buildmethods.RemoteNotConfigured("stopped here on purpose", hint="nothing to fix")
 
@@ -2339,7 +2262,7 @@ def test_the_wait_bounds_reach_the_build_request(tmp_path, monkeypatch, capsys) 
         str(EXAMPLE),
         "--build-dir",
         str(tmp_path / "out"),
-        "--build-mode",
+        "--build-target",
         "remote",
         "--build-server",
         "ws://build.example/ws",

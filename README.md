@@ -38,12 +38,17 @@ driving process the same information as a document instead of a rendering.
 
 This package declares one dependency,
 [mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench), which
-resolves the device model and runs the build and the signature. A `local`
-build compiles in a build environment on this machine, built from
-[mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) together with the C
-runtime it compiles against; a `remote` build hands the context to a server
-from
-[mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver).
+resolves the device model and runs the build and the signature. Where a
+build runs is its **target** (`--build-target`, or the `build.target`
+option): a `local` build compiles in a build environment on this machine,
+built from [mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) together
+with the C runtime it compiles against; a `remote` build hands the context
+to a server from
+[mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver). How
+this machine executes a local build is its **mode** (`--build-mode`, or
+`build.mode`): in a build container, or as a child process against the
+build environment MCUHome unpacked here. `--container-image` pins the image
+for one build, in place of the device's own `sources.container_image`.
 [mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) offers the same
 operations in a browser, over the same workbench API.
 
@@ -81,7 +86,7 @@ commits, licensing — are in the organization's
 ## Security
 
 The private signing key stays on the machine the command runs on: a build
-yields an unsigned image whichever method ran, and a separate step on this
+yields an unsigned image wherever it ran, and a separate step on this
 host applies the signature, so a build server is never handed a key.
 Commissioning passcodes are masked in output that merely passes by, and
 only `mcuhome device matter-pairing` or an explicit `--show-sensitive`

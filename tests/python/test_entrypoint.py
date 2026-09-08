@@ -118,13 +118,14 @@ def test_build_help_advertises_the_probed_flags(capsys) -> None:
         "-o",
         "--project-dir",
         "--builder",
+        "--build-target",
         "--build-mode",
         "--container-image",
     ):
         assert flag in out
     assert "--json" not in out
     assert "--config-root" not in out
-    assert "--method" not in out.replace("--build-mode", "")
+    assert "--method" not in out.replace("--build-mode", "").replace("--build-target", "")
 
 
 def test_the_retired_spellings_are_gone(capsys) -> None:
