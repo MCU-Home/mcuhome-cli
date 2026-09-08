@@ -23,6 +23,7 @@ from mcuhome.model.errors import BuildError
 from mcuhome.model.model import MODEL_VERSION
 from mcuhome.workbench import api, buildmethods, containerbuild, imgtool, sessionclient, signing
 from mcuhome.workbench.buildenvsession import LocalOutcome
+from mcuhome.workbench.buildlock import LOCK_FILE
 from mcuhome.workbench.project import Project
 
 from mcuhome.cli import __version__ as cli_version
@@ -1171,8 +1172,19 @@ def test_build_from_a_model_generates_the_same_tree_as_from_the_yaml(
     )
     capsys.readouterr()
 
-    left = sorted(path.relative_to(direct) for path in direct.rglob("*") if path.is_file())
-    right = sorted(path.relative_to(from_model) for path in from_model.rglob("*") if path.is_file())
+    # The build directory's lock file is not part of the application and
+    # is deliberately not compared: it records the moment the build
+    # started, to the second, for a person reading it next to the
+    # machine — so two builds a second apart differ in it and in nothing
+    # else, which made this test fail about one run in seven.
+    def written(root: Path) -> list[Path]:
+        return sorted(
+            path.relative_to(root)
+            for path in root.rglob("*")
+            if path.is_file() and path.name != LOCK_FILE
+        )
+
+    left, right = written(direct), written(from_model)
     assert left == right
     for relative in left:
         assert (direct / relative).read_bytes() == (from_model / relative).read_bytes(), relative
@@ -1379,7 +1391,7 @@ def test_the_selection_ladder_ends_at_the_local_container() -> None:
 
 
 def test_the_manual_rung_carries_the_target_flags_verbatim(tmp_path) -> None:
-    """--build-target plus its flags bypasses the builder list (ADR 0023 §2)."""
+    """--build-target plus its flags bypasses the builder list."""
     settings = cli.api.resolve_settings(project=None, env={})
     selection = cli._select_build(
         _selection_args(build_target="remote", build_server="10.0.0.5:8291", build_token="t"),
