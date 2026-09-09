@@ -1544,6 +1544,44 @@ def test_a_configured_builder_reaches_the_remote_method_with_its_token(
     assert (seen[0].server, seen[0].token) == ("wss://build.lan:8443/ws", "file-token")
 
 
+def test_the_two_image_statements_travel_apart(tmp_path, capsys, monkeypatch) -> None:
+    """A builder's image and this invocation's are different statements.
+
+    ``--container-image`` is about the build that is running; a local
+    builder's ``image:`` is about the machine it names. The workbench
+    treats them differently — one is refused where no container runs, the
+    other is a note — so the command line must not merge them on the way
+    in.
+    """
+    project = _project_with_remote_builder(tmp_path)
+    (project / "mcuhome.yaml").write_text(
+        "builders:\n  - name: bench\n    type: local\n    image: ':from-the-builder'\n",
+        encoding="utf-8",
+    )
+    seen = _capture_requests(monkeypatch)
+    argv = [
+        "device",
+        "build",
+        "bench-node",
+        "--project-dir",
+        str(project),
+        "--builder",
+        "bench",
+        "--sdk-sources",
+        str(tmp_path),
+        "--signing-key",
+        str(_private_key(tmp_path)),
+    ]
+    assert main(argv) == 1
+    capsys.readouterr()
+    assert (seen[0].image, seen[0].builder_image) == (None, ":from-the-builder")
+
+    seen.clear()
+    assert main([*argv, "--container-image", ":from-this-build"]) == 1
+    capsys.readouterr()
+    assert (seen[0].image, seen[0].builder_image) == (":from-this-build", ":from-the-builder")
+
+
 def test_the_default_builder_answers_a_plain_build(tmp_path, capsys, monkeypatch) -> None:
     """Rung 3: no flag at all, and the configured default still builds remote."""
     project = _project_with_remote_builder(tmp_path)

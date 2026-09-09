@@ -1256,7 +1256,13 @@ def _build_delivered(
                 # while the build runs — so there is nothing to work out
                 # here, and `--container-image` means the same thing at
                 # both targets: pin this one instead.
-                image=selection.image,
+                image=args.container_image,
+                # What a configured builder names is a statement about
+                # that machine rather than about this build, so it is
+                # carried apart: a build without a container says once
+                # that it has no effect instead of refusing every build
+                # the machine ever runs.
+                builder_image=selection.builder.image if selection.builder is not None else None,
                 # Where this machine keeps its compiler cache. Unset
                 # everywhere means the user's cache directory, which is
                 # the answer for everyone who never thinks about it.
