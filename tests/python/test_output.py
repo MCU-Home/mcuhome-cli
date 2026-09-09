@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The output contract (cli ADR 0004): modes, streams, colors, interactivity."""
+"""The output contract: modes, streams, colors, interactivity."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from mcuhome.cli.output import HUMAN, JSON, JSON_STREAM, Output, resolve
 
 
 def test_the_machine_modes_force_non_interactive() -> None:
-    """A consumer parsing NDJSON cannot answer a question (ADR 0004 §3)."""
+    """A consumer parsing NDJSON cannot answer a question."""
     for mode in (JSON, JSON_STREAM):
         resolved = resolve(mode=mode, interactive=True, env={})
         assert resolved.machine

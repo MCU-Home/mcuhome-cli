@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""What the ``mcuhome`` command emits, in one place (cli ADR 0004).
+"""What the ``mcuhome`` command emits, in one place.
 
 Three output modes behind one ``-o/--output`` flag, and one stream
 discipline for all of them:
@@ -96,7 +96,7 @@ def format_table(
     indent: str = "",
     output: Output | None = None,
 ) -> str:
-    """Aligned columns, two spaces apart — the one table style (ADR 0004 §1).
+    """Aligned columns, two spaces apart — the one table style.
 
     Cells are plain strings, or a :class:`Cell` when one wants a color;
     either way alignment counts the text and never an escape code.
@@ -152,7 +152,8 @@ def resolve(
     ``--no-interactive``) or ``None`` for the TTY default; the machine
     modes override it either way. *env* defaults to the process
     environment, which is the command line's to read (unlike the
-    workbench's, ADR 0020) — stated here so tests can state theirs.
+    workbench, which never reads the process environment itself) —
+    stated here so tests can state theirs.
     """
     if env is None:
         env = os.environ

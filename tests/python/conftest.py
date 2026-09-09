@@ -21,8 +21,8 @@ DATA_DIR = TESTS_DIR / "data"
 EXAMPLES_DIR = DATA_DIR / "examples"
 FIXTURE_TREE = DATA_DIR / "tree"
 
-# git does not record the 700/600 modes the secrets hygiene of ADR 0022
-# §5 expects, so a fresh checkout's fixture secrets would draw the
+# git does not record the 700/600 modes the secrets hygiene rules
+# expect, so a fresh checkout's fixture secrets would draw the
 # permission warning in every test that reads them. Setting the modes at
 # collection is invisible to git (only the executable bit is tracked).
 FIXTURE_TREE.joinpath("secrets").chmod(0o700)
@@ -33,7 +33,7 @@ def make_project(root: Path) -> Path:
     """A real project directory at *root* — marker, layout, permissions.
 
     What the tests reach for where they used to scribble a bare tree:
-    since ADR 0022 every directory a ``--project-dir`` names (and every
+    every directory a ``--project-dir`` names (and every
     root the upward search may find) has to carry the marker, so a test
     that wants one asks ``mcuhome project init``'s own implementation.
     """
@@ -79,9 +79,9 @@ def _no_real_user_environment(monkeypatch, tmp_path):
     """No test may touch the developer's own MCUHome configuration.
 
     ``$XDG_CONFIG_HOME/mcuhome/`` on the machine running this suite holds
-    this user's real user configuration layer (``configuration.yaml``,
-    ADR 0022) and their real build servers (``build-servers.toml`` and
-    tokens, E63) — both of which a test resolving settings or the remote
+    this user's real user configuration layer (``configuration.yaml``)
+    and their real build servers (``build-servers.toml`` and
+    tokens) — both of which a test resolving settings or the remote
     ladder would otherwise read. Point the variable at the test's own
     tmp_path instead, and drop every ``MCUHOME_*`` variable a developer's
     shell may carry: the project override would send every test into that
@@ -129,7 +129,7 @@ def _no_real_system_layer(monkeypatch, tmp_path_factory):
 def _no_droppings_in_the_fixtures():
     """The committed fixtures stay byte-identical through every test.
 
-    Since ADR 0015 §8 the signing key is generated *inside the project*
+    The signing key is generated *inside the project*
     (``secrets/firmware/mcuboot.yaml``), and a bare YAML file's stand-in
     project is its own directory — so a build test that forgets to state
     a key or a project would generate one into the repository checkout.

@@ -3,7 +3,7 @@
 """Smoke tests: the console entry point loads and every command has help.
 
 A machine driving this surface feature-probes ``mcuhome device build
---help`` (cli ADR 0002), so the help text of the main commands is
+--help``, so the help text of the main commands is
 machine-facing surface, not just courtesy.
 """
 
@@ -15,7 +15,7 @@ import pytest
 
 from mcuhome.cli.main import build_parser, main
 
-#: The decided vocabulary (cli ADR 0003 §2): project- and
+#: The decided vocabulary: project- and
 #: environment-scoped commands top-level, device-scoped ones under the
 #: ``device`` noun, configuration verbs under ``config``.
 TOP_LEVEL = [
@@ -88,7 +88,7 @@ def _choices(parser, dest: str):
 
 
 def test_the_parser_knows_exactly_the_documented_commands() -> None:
-    """The decided vocabulary, no silent additions (cli ADR 0003 §2)."""
+    """The decided vocabulary, no silent additions."""
     parser = build_parser()
     top = _choices(parser, "command")
     assert sorted(top) == sorted(TOP_LEVEL)
@@ -129,7 +129,7 @@ def test_build_help_advertises_the_probed_flags(capsys) -> None:
 
 
 def test_the_retired_spellings_are_gone(capsys) -> None:
-    """ADR 0023 §5 / cli ADR 0003 §4: no aliases, argparse exit 2."""
+    """Retired spellings get no aliases: argparse refuses them, exit 2."""
     for argv in (
         ["validate", "x"],
         ["build", "x"],

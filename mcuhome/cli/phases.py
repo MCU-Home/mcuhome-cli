@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The interact → validate → execute contract (cli ADR 0004 §3/§4).
+"""The interact → validate → execute contract.
 
 Every command runs in three phases, in this order:
 
@@ -33,7 +33,7 @@ from mcuhome.cli.output import Output
 
 __all__ = ["EXIT_FAILURE", "EXIT_OK", "EXIT_USAGE", "run"]
 
-#: The whole exit-code vocabulary (ADR 0004 §4).
+#: The whole exit-code vocabulary.
 EXIT_OK = 0
 EXIT_FAILURE = 1
 EXIT_USAGE = 2

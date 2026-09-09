@@ -5,8 +5,8 @@
 # scripts/test.d/ (today just pytest), plus a pre-check that every
 # wrapper has a job here.
 #
-# test-pytest needs the workbench (mcu-home/mcuhome-workbench) and, since
-# the ADR 0024 split, the model+compiler from mcu-home/mcuhome-sdk — both
+# test-pytest needs the workbench (mcu-home/mcuhome-workbench) and the
+# model+compiler from mcu-home/mcuhome-sdk — both
 # public siblings, plain checkouts, no deploy keys. Once the packages are
 # published this becomes a plain pip install.
 #
@@ -66,7 +66,7 @@ jobs:
           python-version: "3.13"
 
       - name: Create .venv and install
-        # One namespace, two repositories since the ADR 0024 split:
+        # One namespace, two repositories:
         # model+compiler from mcuhome-sdk/packaging, the workbench from
         # the mcuhome repo root. One invocation, so pip resolves the
         # sibling pins against the copies being installed rather than

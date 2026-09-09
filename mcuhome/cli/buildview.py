@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The live view of a running build (cli ADR 0004, PO 2026-08-15).
+"""The live view of a running build (PO 2026-08-15).
 
 A build is minutes of someone else's output, and the two questions a
 person actually has — *how far along is it* and *where is this running*
@@ -33,7 +33,7 @@ the validated device is — and that line stays: it scrolls with the
 terminal rather than living inside the repainted region.
 
 **Two implementations, one seam.** :func:`make_view` answers with the
-live view only when the run is interactive (ADR 0004 §3: a TTY, no
+live view only when the run is interactive (a TTY, no
 ``--no-interactive``, not a machine mode); everywhere else —  CI, pipes,
 ``-o json``/``json-stream`` — :class:`PlainView` keeps today's linear
 behavior: log lines pass through (stdout for a human, stderr under a

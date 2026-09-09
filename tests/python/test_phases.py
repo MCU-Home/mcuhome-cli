@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The interact → validate → execute contract (cli ADR 0004 §3/§4)."""
+"""The interact → validate → execute contract."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from mcuhome.cli.output import JSON, Output
 
 
 def test_the_exit_codes_are_exactly_three() -> None:
-    """0, 1, 2 — nothing else, deliberately (ADR 0004 §4)."""
+    """0, 1, 2 — nothing else, deliberately."""
     assert (phases.EXIT_OK, phases.EXIT_FAILURE, phases.EXIT_USAGE) == (0, 1, 2)
 
 
@@ -41,7 +41,7 @@ def test_interact_is_skipped_when_not_interactive() -> None:
 
 def test_a_validate_problem_is_exit_2_and_execute_never_runs(capsys) -> None:
     """The boundary is sharper than "before anything is written": the
-    action does not start at all (PO wording, ADR 0004 §3)."""
+    action does not start at all (PO wording)."""
     ran: list[str] = []
     code = phases.run(
         output=Output(),

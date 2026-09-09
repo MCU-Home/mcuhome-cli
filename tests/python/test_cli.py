@@ -33,7 +33,7 @@ from mcuhome.cli.output import Output
 
 EXAMPLE = EXAMPLES_DIR / "00-bmp180-two-endpoints.yaml"
 
-#: The §7.2.1 build report a container build delivers (build-report.json):
+#: The build report a container build delivers (build-report.json):
 #: the report version, the mandatory signing block, and the optional
 #: memory table the linker enforced — no `inputs`/`outputs`/`signed`.
 REPORT = {
@@ -63,7 +63,7 @@ FAKE_ENVIRONMENT = "ghcr.io/mcu-home/build-environment:0.1.10.dev2-r1@sha256:" +
 def _fake_local_run(model, **kwargs):
     """A stand-in for compose_local_build: the files a container delivers, no docker.
 
-    Writes the unsigned firmware and the §7.2.1 build report into the
+    Writes the unsigned firmware and the build report into the
     per-invocation ``out`` the real backend would, and answers a successful
     :class:`~mcuhome.workbench.buildenvsession.LocalOutcome`. The private key
     is deliberately not among the arguments a build ever receives — the
@@ -163,7 +163,7 @@ def _fake_imgtool(monkeypatch, tmp_path):
 
 
 def test_version_reports_the_whole_stack(capsys) -> None:
-    """One line per part (cli ADR 0002 §5), not the builder's number alone."""
+    """One line per part, not the builder's number alone."""
     with pytest.raises(SystemExit) as caught:
         main(["--version"])
     assert caught.value.code == 0
@@ -235,10 +235,10 @@ def test_unknown_device_exits_one(capsys) -> None:
 def test_build_without_a_flag_builds_in_the_container_and_signs_on_the_host(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """E54's default, as the command line sees it.
+    """The default build target, as the command line sees it.
 
     No flag drives the local ABI path: the container delivers an unsigned
-    image plus the §7.2.1 report, and the host signs it — one command to a
+    image plus the build report, and the host signs it — one command to a
     flashable image, with the private key never in a container.
     """
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
@@ -399,7 +399,7 @@ def test_the_footprint_table_drops_the_linker_region_and_keeps_empty_ones() -> N
 
 
 def test_the_footprint_table_colors_only_a_tight_fit() -> None:
-    """Color is emphasis on a number that is printed either way (ADR 0004 §1)."""
+    """Color is emphasis on a number that is printed either way."""
     colored = Output(mode="human", color=True, interactive=True)
     roomy = cli.format_memory(
         [cli.Footprint(image="app", region="FLASH", used=100, total=1000)], output=colored
@@ -644,7 +644,7 @@ def test_matter_pairing_without_matter_is_a_refusal(tmp_path, capsys) -> None:
 
 
 # --------------------------------------------------------------------------
-# -o json (cli ADR 0004 §2)
+# -o json
 # --------------------------------------------------------------------------
 
 
@@ -717,7 +717,7 @@ def test_build_json_mirrors_the_delivery(tmp_path, capsys, monkeypatch) -> None:
     assert document["ok"] is True
     assert document["device"] == "bmp180-node"
     assert document["signed"] is True
-    # The §7.2.1 report the build environment delivered, verbatim, and the
+    # The report the build environment delivered, verbatim, and the
     # artifacts beside it under the roles it declared.
     assert document["report"]["signing"]["arguments"]["slot-size"] == 912 * 1024
     assert {entry["role"] for entry in document["artifacts"]} == {
@@ -738,14 +738,14 @@ def test_generate_only_json_names_what_it_wrote(tmp_path, capsys) -> None:
 
 
 # --------------------------------------------------------------------------
-# Detached signing (ADR 0015 decision 8)
+# Detached signing
 # --------------------------------------------------------------------------
 
 
 def _private_key(tmp_path: Path) -> Path:
     """A throwaway private key, stated explicitly wherever a build signs.
 
-    Since ADR 0015 §8 the default signing key lives *inside the project*
+    The default signing key lives *inside the project*
     (``secrets/firmware/mcuboot.yaml``, generated on first need) — and a
     bare example file's stand-in project is its own directory, so a test
     that signs without stating a key would generate one into the
@@ -754,7 +754,7 @@ def _private_key(tmp_path: Path) -> Path:
     key = tmp_path / "signing.key"
     if not key.exists():
         key.write_text(signing.generate_key_pem(0x1234567890ABCDEF), "utf-8")
-        key.chmod(0o600)  # key material: anything wider is a refusal (ADR 0022 §5)
+        key.chmod(0o600)  # key material: anything wider is a refusal
     return key
 
 
@@ -766,7 +766,7 @@ def _public_key(tmp_path: Path) -> Path:
 
 
 def test_no_sign_without_a_public_key_is_an_exit_2_refusal(tmp_path, capsys) -> None:
-    """The validate phase (cli ADR 0004 §3/§4): a missing required input is
+    """The validate phase: a missing required input is
     a usage refusal — exit 2, and the build never starts."""
     assert main(["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), "--no-sign"]) == 2
     err = capsys.readouterr().err
@@ -798,7 +798,7 @@ def test_no_sign_refuses_a_private_key_as_the_public_one(tmp_path, capsys) -> No
 
 # --------------------------------------------------------------------------
 # The default local path: auto-sign, --no-sign, the sign verb's two shapes,
-# and the security invariant (E54/E55)
+# and the security invariant
 # --------------------------------------------------------------------------
 
 
@@ -905,7 +905,7 @@ def test_a_no_sign_rebuild_drops_a_prior_signed_image_and_ota(
 
 
 def test_sign_reads_a_build_report_directory(tmp_path, capsys, monkeypatch) -> None:
-    """`mcuhome sign` on the container backend's delivery uses the §7.2.1 report."""
+    """`mcuhome sign` on a container build's delivery uses the build report."""
     monkeypatch.setattr(buildmethods, "compose_local_build", _fake_local_run)
     out_dir = tmp_path / "out"
     main(
@@ -951,12 +951,12 @@ def test_sign_on_a_directory_with_no_build_output_is_a_clean_refusal(tmp_path, c
 
 
 def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monkeypatch) -> None:
-    """E55 security invariant, at the command boundary.
+    """The private-key security invariant, at the command boundary.
 
     The container gets the **public** key and nothing else: the private key
     is never one of the arguments the build backend is handed, and what it
     *is* handed for the key is a public key. Run inside a real project, so
-    the key under test is the per-project one (ADR 0015 §8) — generated as
+    the key under test is the per-project one — generated as
     ``secrets/firmware/mcuboot.pem`` by this very build, and still
     absent from everything the backend received, path and value alike.
     The docker-argv half of the same invariant is asserted against the
@@ -983,7 +983,7 @@ def test_the_private_key_never_reaches_the_local_backend(tmp_path, capsys, monke
     # The per-project key was generated on first need — the human header
     # says so loudly, naming the key file itself — and yet nothing the
     # backend received names or contains it. Two files since the !file
-    # shape (draft ADR 0015 §8): mcuboot.pem is the material,
+    # shape: mcuboot.pem is the material,
     # mcuboot.yaml references it.
     out = capsys.readouterr().out
     key_home = project / "secrets" / "firmware" / "mcuboot.pem"
@@ -1078,7 +1078,7 @@ def test_new_refuses_a_board_nobody_brought_up(tmp_path, capsys) -> None:
 def test_public_key_prints_the_public_half(tmp_path, capsys, monkeypatch) -> None:
     """Stdout is the file API here: a redirect writes the file, `-o PATH` is gone.
 
-    The vocabulary step resolved the old collision (cli ADR 0004): `-o`
+    The vocabulary step resolved the old collision: `-o`
     selects the output *format* everywhere it exists, so the file-writing
     spelling retired without an alias — argparse refuses it, exit 2.
     """
@@ -1133,7 +1133,7 @@ def test_schema_registry_prints_the_registry(capsys) -> None:
 
 
 # --------------------------------------------------------------------------
-# build --model: the build server's entry point (dashboard ADR 0007 §4)
+# build --model: the entry point a build server uses, skipping stages 1-3
 # --------------------------------------------------------------------------
 
 
@@ -1142,7 +1142,7 @@ def test_build_from_a_model_generates_the_same_tree_as_from_the_yaml(
 ) -> None:
     """The property the remote-build contract rests on.
 
-    The canonical model is the wire format (builder-pipeline.md §6): the
+    The canonical model is the wire format between the two machines: the
     dashboard resolves stages 1-3 and sends the model, a build server runs
     stages 4-5 on it and never sees the configuration tree. That is only a
     contract if both routes produce the *same* application — including the
@@ -1277,7 +1277,7 @@ def test_model_errors_serialize_in_json_mode(tmp_path, capsys) -> None:
 
 
 def test_a_failed_container_build_quotes_the_programs_own_account():
-    """§5.4's reason, error message and details reach the user verbatim.
+    """The build environment's reason, error message and details reach the user verbatim.
 
     A program that refuses before it runs anything writes only the result
     document and no build log — so the document is the entire diagnosis,
@@ -1364,8 +1364,9 @@ def test_a_failed_remote_build_quotes_the_verdicts_error_envelope():
 
 
 # --------------------------------------------------------------------------
-# Choosing where to build: the three rungs of ADR 0023 §2
-# (ADR 0020 decision 6, E54, E56, E62; flag spellings cli ADR 0003)
+# Choosing where to build: the three rungs (manual, named builder,
+# configured default), the local container as the default target, and
+# host-side signing for every target
 # --------------------------------------------------------------------------
 
 
@@ -1383,7 +1384,7 @@ def _selection_args(**overrides) -> argparse.Namespace:
 
 
 def test_the_selection_ladder_ends_at_the_local_container() -> None:
-    """No flags, no configuration: the fallback is a plain local build (E54)."""
+    """No flags, no configuration: the fallback is a plain local build."""
     settings = cli.api.resolve_settings(project=None, env={})
     selection = cli._select_build(_selection_args(), settings, None, Output())
     assert selection.target == buildmethods.TARGET_LOCAL
@@ -1413,7 +1414,7 @@ def test_the_manual_rung_carries_the_target_flags_verbatim(tmp_path) -> None:
 
 
 def test_native_is_gone_and_is_now_an_unknown_argument(tmp_path, capsys) -> None:
-    """E62: the ``--native`` alias is absent, not deprecated.
+    """Pre-1.0: the ``--native`` alias is absent, not deprecated.
 
     argparse refuses it as an unknown argument with exit code 2, the same
     as any typo.
@@ -1472,7 +1473,7 @@ def _no_build_may_start(monkeypatch) -> None:
 def test_selection_flags_that_do_not_pair_are_usage_errors(
     tmp_path, capsys, monkeypatch, extra, said
 ) -> None:
-    """ADR 0023 §2: the rungs do not mix — and the action never starts (exit 2)."""
+    """The rungs do not mix — and the action never starts (exit 2)."""
     _no_build_may_start(monkeypatch)
     argv = ["device", "build", str(EXAMPLE), "--build-dir", str(tmp_path), *extra]
     assert main(argv) == 2
@@ -1481,7 +1482,7 @@ def test_selection_flags_that_do_not_pair_are_usage_errors(
     assert "Traceback" not in err
 
 
-# ---- configured builders, end to end (ADR 0023) --------------------------
+# ---- configured builders, end to end --------------------------
 
 
 def _project_with_remote_builder(tmp_path: Path, *, token_mode: int = 0o600) -> Path:
@@ -1845,7 +1846,7 @@ def test_the_manual_rung_bypasses_the_configured_default(tmp_path, capsys, monke
 def test_a_broken_builder_entry_stops_the_build_with_its_location(
     tmp_path, capsys, monkeypatch
 ) -> None:
-    """Builders are ordinary configuration (ADR 0023): a broken entry is a
+    """Builders are ordinary configuration: a broken entry is a
     located refusal out of the file that wrote it, before anything runs."""
     project = _project_with_remote_builder(tmp_path)
     (project / "mcuhome.yaml").write_text(
@@ -1900,8 +1901,8 @@ def test_remote_with_a_server_but_no_sdk_source_names_that_knob(
 ) -> None:
     """The one thing left that ``remote`` cannot invent: which SDK package.
 
-    E65 closed the gap — this method creates its own build context now —
-    and left exactly one input a user must supply, the same one the
+    The ``remote`` method creates its own build context now, closing
+    that gap, and leaves exactly one input a user must supply, the same one the
     default ``local`` method needs: a directory holding the hash-pinned
     SDK package. The refusal names ``--sdk-sources`` and the variable, and
     does **not** offer another method as the workaround, because there is
@@ -1987,7 +1988,7 @@ def test_every_target_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
     signing step ran exactly once, on the build directory, for this
     device, over the report the build named.
 
-    The ``remote`` leg also carries an ``--sdk-source``, because since E65
+    The ``remote`` leg also carries an ``--sdk-source``, because
     it needs one for the same reason ``local`` does: it creates its own
     build context and the SDK pin is part of that context's identity. The
     request it produced is checked below.
@@ -2058,8 +2059,8 @@ def test_every_target_reaches_the_one_signing_step(tmp_path, capsys, monkeypatch
 
     # What the command line handed the remote method: the server, the
     # token rung left empty, and the SDK source — the same field the
-    # `local` method reads, which is the point of E65 (one resolver, one
-    # knob, two methods).
+    # `local` method reads: one resolver, one knob, shared by both
+    # methods.
     assert [request.server for request in requests] == ["ws://build.example/ws"]
     assert requests[0].sdk_sources == (sdk_source,)
 
@@ -2096,7 +2097,7 @@ def test_the_build_help_advertises_the_targets_and_modes(capsys) -> None:
 
 
 # --------------------------------------------------------------------------
-# -o json-stream: the NDJSON contract (cli ADR 0004 §2)
+# -o json-stream: the NDJSON contract
 # --------------------------------------------------------------------------
 
 

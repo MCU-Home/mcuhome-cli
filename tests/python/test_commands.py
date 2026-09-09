@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The commands the vocabulary step added (cli ADR 0003 §2).
+"""The commands the vocabulary step added.
 
-``config`` (print/get/set/unset over the five layers of ADR 0022),
+``config`` (print/get/set/unset over the five configuration layers),
 ``device list``, ``doctor``, the honest stubs, and ``device new
 --name``. The build-selection rungs have their own section in
 ``test_cli.py``; here it is the new surface itself.
@@ -301,7 +301,7 @@ def test_doctor_warns_about_exposed_secrets(tmp_path, capsys, monkeypatch) -> No
 
 
 def test_flash_and_first_time_setup_refuse_in_words(tmp_path, capsys, monkeypatch) -> None:
-    """cli ADR 0003: honest stubs — a refusal naming the plan, exit 1."""
+    """Honest stubs: a refusal naming the plan, exit 1."""
     project = _project_with_device(tmp_path)
     monkeypatch.chdir(project)
     assert main(["device", "flash", "bench-node"]) == 1

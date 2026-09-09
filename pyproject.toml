@@ -6,7 +6,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-# The plain name, on purpose (ADR 0020 decision 2): `pip install
+# The plain name, on purpose: `pip install
 # mcuhome` should yield the command a user expects, and no other package
 # has a better claim to it — the library ships as mcuhome-model,
 # mcuhome-workbench and mcuhome-compiler, the services as
@@ -34,9 +34,9 @@ classifiers = [
 ]
 # The one dependency, on purpose: this package is the command shell of
 # the library family and adds no behavior of its own. The workbench is
-# the API the shell actually talks to, so it is the declared dependency
-# (cli ADR 0002); its extras pull the compiler for the local build
-# methods and the session client for remote. None of them is published
+# the API the shell actually talks to, so it is the declared dependency;
+# its extras pull the compiler for the local build methods and the
+# session client for remote. None of them is published
 # yet — see the README for the dev install.
 dependencies = ["mcuhome-workbench[generate,remote]"]
 
