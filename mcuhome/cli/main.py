@@ -3392,8 +3392,10 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DIR",
         help=(
             "directory holding the hash-pinned MCUHome SDK package this build is "
-            "pinned to (repeatable; searched in order). Needed at both targets — "
-            "both create a build context, and the pin is part of its identity. "
+            "pinned to (repeatable; searched in order). Optional at both targets: "
+            "the build resolves the SDK from a configured directory first and the "
+            "package registry second, so nothing here is required as long as a "
+            "registry can answer. "
             "An option of the configuration registry: "
             f"{option_env_var('build.sdk_sources')} is a PATH-style list of "
             "them, and the configuration files take a `sdk_sources:` list "
