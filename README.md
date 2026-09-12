@@ -65,6 +65,7 @@ where the two keys are read back:
 ```console
 $ mcuhome config print
 option                        value                               origin
+…
 build.target                  local                               default
 build.mode                    container                           default
 build.container_repositories  ghcr.io/mcu-home/build-environment  default
