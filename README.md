@@ -95,11 +95,11 @@ The workspace — the directory holding `.west/`, the `mcuhome-sdk` checkout,
 the tools are the ones on your `PATH`. Nothing is fetched, unpacked or
 verified, and nothing is written into the workspace. It builds on this machine
 only: a development build has no image to run in and no pinned packages to name,
-so `--build-mode container`, `--build-target remote` and a device that states
-any `sources.*` entry are each refused with the reason. The command line says
-which environment a build used — the image and its digest for a container
-build, the package versions for an unpacked one, and the workspace path for a
-development build.
+so `--build-mode container`, `--build-target remote` and a device that states a
+`sources.*` entry other than its default are each refused with the reason. The
+command line says which environment a build used — the image and its digest for
+a container build, the package versions for an unpacked one, and the workspace
+path for a development build.
 
 ## How it fits into MCUHome
 
