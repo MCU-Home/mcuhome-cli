@@ -148,13 +148,20 @@ def _no_docker(monkeypatch):
     A safety net, not a convenience: ``mcuhome build`` defaults to the
     container (through the build environment specification's container
     profile), so a test that forgets to stub it would otherwise quietly
-    start a real Matter build on the machine running pytest. Every seam
-    that could start a real process is closed — the container runtime's
+    start a real Matter build on the machine running pytest. What is
+    closed here is exactly the two build paths — the container runtime's
     two impure operations (:class:`~mcuhome.workbench.containerbuild.Runtime`
     driving ``docker``) and the subprocess profile's one child-process
-    launch — so neither path can escape. Tests that want a working build
-    replace these with their own stub, which wins because their
+    launch — so neither build can escape. Tests that want a working
+    build replace these with their own stub, which wins because their
     monkeypatch is applied later.
+
+    It is deliberately not a blanket ban on child processes, and it does
+    not pretend to be one. Three other seams can still start a process
+    and are stubbed by the tests that reach them: the build environment
+    store's provisioning (it probes an interpreter and installs wheels),
+    a development build's ``west list`` in the workspace it was pointed
+    at, and ``imgtool`` when firmware is signed.
     """
 
     def refuse_run(self, argv, on_line=None):
