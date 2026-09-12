@@ -34,6 +34,72 @@ mcuhome device build my-device
 Every command answers `--help`, and `-o json` / `-o json-stream` hand a
 driving process the same information as a document instead of a rendering.
 
+### Where a build runs, and how
+
+`mcuhome device build` places a build on two axes. The **target** is where it
+runs, the **mode** is how this machine executes a local one; each flag sets the
+configuration option of the same name for that one invocation:
+
+```sh
+mcuhome device build my-device --build-target local  --build-mode container
+mcuhome device build my-device --build-target local  --build-mode subprocess
+mcuhome device build my-device --build-target remote --build-server buildbox:8080
+```
+
+| flag | what it states |
+|---|---|
+| `--build-target local\|remote` | build on this machine, or on a build server (`build.target`) |
+| `--build-mode container\|subprocess` | how a local build is executed (`build.mode`); a remote build has no mode of its own to state |
+| `--build-server ADDRESS`, `--build-token TOKEN` | the remote target's server and its bearer token; a configured builder carries its own |
+| `--container-image PIN` | pin the image for this one build: a repository, `:tag`, `@sha256:…`, or a repository with either. Overrides the device's `sources.container_image` |
+| `--sdk-sources DIR` | a directory holding the hash-pinned SDK package (repeatable, searched in order). Optional at both targets — without one the package registry answers |
+| `--builder NAME` | build through a configured builder instead of stating target and flags |
+
+Nothing tells a build how many jobs to run: a build is given a CPU and a memory
+budget (`build.cpus`, `build.memory`), the build environment sizes its own
+parallelism from it, and a container build is held to it from outside.
+
+`mcuhome config print` lists every option with the layer it came from, which is
+where the two keys are read back:
+
+```console
+$ mcuhome config print
+option                        value                               origin
+build.target                  local                               default
+build.mode                    container                           default
+build.container_repositories  ghcr.io/mcu-home/build-environment  default
+…
+$ mcuhome config set build.mode subprocess --user
+```
+
+`mcuhome doctor` answers the same question for the machine rather than for one
+build: its `builders` line names the configured builders, or says what a plain
+`mcuhome device build` would do — "none configured — a plain build runs on this
+machine, in a build container" — and the container check is skipped where the
+mode is `subprocess`.
+
+### Building against your own west workspace
+
+Working on the SDK itself is a build like any other, with the environment
+pointed at a west workspace you maintain:
+
+```sh
+mcuhome config set build.mode subprocess --user
+mcuhome config set build.dev_workspace ~/work/mcuhome-workspace --user
+mcuhome device build my-device
+```
+
+The workspace — the directory holding `.west/`, the `mcuhome-sdk` checkout,
+`zephyr/`, `modules/` and `bootloader/` — is then the whole environment, and
+the tools are the ones on your `PATH`. Nothing is fetched, unpacked or
+verified, and nothing is written into the workspace. It builds on this machine
+only: a development build has no image to run in and no pinned packages to name,
+so `--build-mode container`, `--build-target remote` and a device that states
+any `sources.*` entry are each refused with the reason. The command line says
+which environment a build used — the image and its digest for a container
+build, the package versions for an unpacked one, and the workspace path for a
+development build.
+
 ## How it fits into MCUHome
 
 This package declares one dependency,
