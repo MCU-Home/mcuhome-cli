@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The live view of a running build (PO 2026-08-15).
+"""The live view of a running build.
 
 A build is minutes of someone else's output, and the two questions a
 person actually has — *how far along is it* and *where is this running*

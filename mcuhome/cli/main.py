@@ -928,7 +928,7 @@ def _build_holding_the_directory(
 
 
 # --------------------------------------------------------------------------
-# What a build step says about itself (PO 2026-08-16)
+# What a build step says about itself
 # --------------------------------------------------------------------------
 #
 # A step line says how far a build is; these lines say what it found on
@@ -1180,9 +1180,9 @@ def _build_delivered(
         print()
     sys.stdout.flush()
 
-    # The step line of the live view (PO 2026-08-15): each
-    # label carries where that step runs. Validation already happened —
-    # this function starts with a resolved model — so it opens settled.
+    # The step line of the live view: each label carries where that step
+    # runs. Validation already happened — this function starts with a
+    # resolved model — so it opens settled.
     where = f"remote {selection.builder.name}" if remote and selection.builder else None
     if remote and where is None:
         where = f"remote {server}" if server else "remote"

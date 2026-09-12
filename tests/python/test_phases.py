@@ -41,7 +41,7 @@ def test_interact_is_skipped_when_not_interactive() -> None:
 
 def test_a_validate_problem_is_exit_2_and_execute_never_runs(capsys) -> None:
     """The boundary is sharper than "before anything is written": the
-    action does not start at all (PO wording)."""
+    action does not start at all."""
     ran: list[str] = []
     code = phases.run(
         output=Output(),
