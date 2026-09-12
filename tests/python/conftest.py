@@ -92,7 +92,6 @@ def _no_real_user_environment(monkeypatch, tmp_path):
         "MCUHOME_SIGNING_KEY",
         "MCUHOME_PROJECT_DIR",
         "MCUHOME_BUILD_SDK_SOURCES",
-        "MCUHOME_JOBS",
         "MCUHOME_DEFAULT_BUILDER",
         "NO_COLOR",
     ):

@@ -35,9 +35,10 @@ classifiers = [
 # The one dependency, on purpose: this package is the command shell of
 # the library family and adds no behavior of its own. The workbench is
 # the API the shell actually talks to, so it is the declared dependency;
-# its extras pull the compiler for the local build methods and the
-# session client for remote. None of them is published
-# yet — see the README for the dev install.
+# its `generate` extra pulls the compiler for when this machine
+# generates a device's Zephyr application itself, and its `remote`
+# extra pulls the session client for the `remote` build target. None of
+# them is published yet — see the README for the dev install.
 dependencies = ["mcuhome-workbench[generate,remote]"]
 
 [project.urls]
