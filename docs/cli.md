@@ -737,6 +737,13 @@ last lines are shown through a fixed frame that repaints in place, under
 a step line that says where each step runs; anywhere else (a pipe, CI, a
 machine mode) the lines pass through to stderr.
 
+**What a person reads.** The summary of a build that worked and the
+narration of one that did not are both on stdout: each is the human
+rendering of this command's own document, and an answer is an answer
+whether it is yes or no. Stderr carries what happened while the run was
+going — the build log, the repainting frame, and the line that says a
+stop was heard with the bound it may take — and rendered refusals.
+
 Document: `{ok, build, signing, footprint}` — `build` is
 `BuildResult.to_dict()` (`{ok, stopped, target, device, context_id,
 out_dir, report, container_image, artifacts, diagnostics}`), `signing`

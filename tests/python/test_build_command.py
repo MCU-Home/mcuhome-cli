@@ -370,6 +370,36 @@ class TestSayingNo:
         assert document["build"]["diagnostics"][0]["message"] == "the compile step exited 1"
         assert "errors" not in document
 
+    def test_a_person_reads_the_narration_where_the_summary_would_have_been(
+        self, device: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A negative answer is rendered on stdout, like a positive one.
+
+        Whatever the answer, it is the command's own document being
+        rendered — stderr carries what happened while the run was going
+        (the build log, the live frame) and rendered refusals, and a
+        build that ran and failed is neither.
+        """
+        finding = api.Diagnostic(
+            severity=api.SEVERITY_ERROR, message="the compile step exited 1", kind="BuildError"
+        )
+        monkeypatch.setattr(api, "build_firmware", FakeBuild(ok=False, diagnostics=(finding,)))
+        assert main(["device", "build", "kitchen", "--color", "never"]) == 1
+        printed = capsys.readouterr()
+        assert "The firmware did not build." in printed.out
+        assert "the compile step exited 1" in printed.out
+        assert "The firmware did not build." not in printed.err
+
+    def test_a_stopped_build_says_so_on_stdout_too(
+        self, device: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.setattr(api, "build_firmware", FakeBuild(interrupts=1))
+        assert main(["device", "build", "kitchen", "--color", "never"]) == 1
+        printed = capsys.readouterr()
+        assert "The build was ended before it produced anything." in printed.out
+        # The bound, though, is stated while the run is still going.
+        assert "Stopping the build" in printed.err
+
     def test_a_missing_key_is_the_workbench_refusal_that_names_the_command(
         self, in_project: Path, built: FakeBuild, capsys: pytest.CaptureFixture[str]
     ) -> None:

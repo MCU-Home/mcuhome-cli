@@ -754,25 +754,31 @@ def _print_log_tail(view: object, log_path: Path, *, output: Output) -> None:
 def _print_failure(result: api.BuildResult, *, output: Output) -> None:
     """What a build that ran and said no has to say, for a person.
 
+    On **stdout**, like the summary of a build that worked: a build that
+    ran and failed is a negative answer and this is the human rendering
+    of it, not a rendered refusal. Only what happened while the run was
+    going — the build log and the live frame — is stderr's.
+
     The findings are the workbench's own words — the delivery condition
     that failed, or what a build server refused with — and a machine mode
     reads them out of the document instead.
     """
     if output.machine:
         return
+    output.human()
     if result.stopped:
-        output.log(
+        output.human(
             output.style(_("Stopped."), YELLOW, BOLD)
             + " "
             + _("The build was ended before it produced anything.")
         )
         return
-    output.log(output.style(_("The firmware did not build."), RED, BOLD))
+    output.human(output.style(_("The firmware did not build."), RED, BOLD))
     for finding in result.diagnostics:
         document = finding.to_dict()
-        output.log(f"  {document['message']}")
+        output.human(f"  {document['message']}")
         if document.get("hint"):
-            output.log(f"  {output.muted(str(document['hint']))}")
+            output.human(f"  {output.muted(str(document['hint']))}")
 
 
 def _print_summary(
