@@ -122,13 +122,16 @@ def device_list(invocation: Invocation) -> int:
 
 
 def device_info(invocation: Invocation) -> int:
-    """``mcuhome device info <device>``: one device in full."""
+    """``mcuhome device info <device>``: one device in full.
+
+    Its document carries the validation whole, so a finding is said
+    once: the live channel is used in the stream and nowhere else
+    (:func:`_while_it_happens`), the same shape ``device validate`` has.
+    """
     output = invocation.output
     project, entry = _device(invocation)
     invocation.start()
-    validation = api.validate_device(
-        entry, project=project, on_warning=lambda finding: output.finding(finding.to_dict())
-    )
+    validation = api.validate_device(entry, project=project, on_warning=_while_it_happens(output))
     name = validation.model.device.name if validation.model is not None else _name_of(entry)
     out_dir = project.root / api.BUILD_DIR / name
     record = api.read_build(out_dir)

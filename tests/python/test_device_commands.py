@@ -98,6 +98,33 @@ class TestDeviceInfo:
         assert messages[0] == {"verb": "start", "task": "device info"}
         assert [message["verb"] for message in messages].count("result") == 1
 
+    def test_a_warning_is_said_once_and_where_it_can_be_read(
+        self, device: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The document carries the validation, so nothing says it twice.
+
+        The same shape ``device validate`` has: the stream is the one
+        mode with a place for a finding *as it happens*, and in the other
+        two the finding is read out of the document that already holds
+        it.
+        """
+        (device / "secrets" / "device" / "kitchen.yaml").chmod(0o644)
+
+        assert main(["device", "info", "kitchen", "--color", "never"]) == 0
+        printed = capsys.readouterr()
+        assert printed.out.count("readable by other users") == 1
+        assert "readable by other users" not in printed.err
+
+        assert main(["device", "info", "kitchen", "-o", "json"]) == 0
+        printed = capsys.readouterr()
+        assert "readable by other users" not in printed.err, "the document carries it"
+        assert json.loads(printed.out)["validation"]["diagnostics"][0]["severity"] == "warning"
+
+        assert main(["device", "info", "kitchen", "-o", "json-stream"]) == 0
+        live = [message for message in _stream(capsys) if message["verb"] == "diagnostic"]
+        assert len(live) == 1
+        assert live[0]["diagnostic"]["severity"] == "warning"
+
     def test_a_person_reads_the_device_and_its_build(
         self, device: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
