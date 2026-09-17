@@ -474,7 +474,9 @@ renders through its own document.
 One option's effective value.
 
 No flags of its own. Calls `option` (to refuse a key nobody declared
-with the same words a file would be refused with) and `resolve_settings`.
+with the same words a file would be refused with), `resolve_settings` and
+`Settings.setting`, which answers one option key or one entry key of a
+map option with the layer that entry came from.
 Document: `{ok, name, value, origin, source}`.
 
 ### `mcuhome config set <name> <value> [--scope <scope>]`
@@ -536,7 +538,7 @@ directory right now.
 
 No flags of its own. Calls `resolve_project` and `find_devices`.
 Document: `{ok, project, devices}`, each device a record
-`{name, file, board, ok, problems, built, signed, busy}`. The top-level
+`{ok, name, file, board, problems, built, signed, busy}`. The top-level
 `ok` is the verdict of the **listing**: it is false only when the
 project could not be listed, never because a device in it has a problem
 — that is the row's own `ok`, and a client shows a list with a bad row
@@ -737,9 +739,9 @@ would write and the files it would remove first.
 
 ### `mcuhome device clean [<device>]`
 Removes what a build produced — the record, the report, the artifacts,
-the signed images, the work roots — and leaves everything else in the
-directory alone, including a work root somebody named themselves. The
-directory itself stays.
+the signed images, the OTA image, the work roots — and leaves everything
+else in the directory alone, including a work root somebody named
+themselves. The directory itself stays.
 
 | Flag | Value | Carries |
 |---|---|---|
@@ -1132,7 +1134,7 @@ reference is where they are defined, and it is the normative one.
 | project | `root`, `id`, `discovered`, `version` |
 | new project | `project`, `created` |
 | new device | `project`, `entry`, `name`, `board` |
-| device record | `name`, `file`, `board`, `ok`, `problems`, `built`, `signed`, `busy` |
+| device record | `ok`, `name`, `file`, `board`, `problems`, `built`, `signed`, `busy` |
 | validation | `ok`, `file`, `diagnostics`, `model` |
 | finding (diagnostic) | `severity`, `message`, `file`, `line`, `column`, `key`, `hint`, `kind` |
 | error entry | the same without `severity` |
@@ -1153,7 +1155,7 @@ reference is where they are defined, and it is the normative one.
 | setting | `value`, `origin`, `source` — `origin` one of `default`, `program`, `system`, `user`, `project`, `environment`, `arguments` |
 | builder | `name`, `target`, `origin`, `source`, `server`, `container_image` |
 | selected builder | `target`, `builder`, `server`, `container_image` — never a token |
-| registry | `base_domain`, `untrusted`, `anchor`, `mirrors` |
+| registry | `base_domain`, `origin`, `source`, `untrusted`, `mirrors`, `anchor` |
 | secret scope | `kind`, `name`, `file`, `exists` |
 | secret key | `key`, `masked`, `used_by` |
 | secret file | `scope`, `keys` |
@@ -1507,7 +1509,7 @@ which this command line is the worked example of.
 | `project info [<dir>]` | `resolve_project`, `read_project`, `is_upgrading`, `plan_upgrade`, `find_devices` |
 | `project upgrade [<dir>]` | `plan_upgrade`, `find_running_builds`, `open_upgrade_session`, `UpgradeSession.apply` |
 | `config print` | `resolve_settings` |
-| `config get <name>` | `option`, `resolve_settings` |
+| `config get <name>` | `option`, `resolve_settings`, `Settings.setting` |
 | `config set <name> <value>` | `resolve_config_file`, `set_config_value` |
 | `config unset <name>` | `resolve_config_file`, `unset_config_value` |
 | `device new <device>` | `resolve_project`, `render_device_file`, `create_device` |
