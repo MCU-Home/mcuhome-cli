@@ -604,7 +604,11 @@ build directory holds.
 
 No flags of its own. Calls `resolve_device`, `validate_device`,
 `read_build`, `is_busy` and, where a build report is there,
-`read_build_report` with `memory_footprint`. This is one of the commands
+`read_build_report` with `memory_footprint`. `validate_device` is given
+`on_warning` in `json-stream` and nowhere else, the same as
+`device validate`: this document carries the validation whole, so in the
+other two modes the finding is read where it already stands rather than
+said a second time beside it. This is one of the commands
 that can answer negatively: a device whose configuration is invalid is
 `ok: false` with its findings in `validation.diagnostics`, not a
 refusal.
@@ -627,9 +631,10 @@ every problem, nothing written.
 `--show-sensitive` is a rendering decision and changes no document: the
 machine document is the whole canonical model either way, because a
 caller that asked for the model gets the model. Calls `resolve_device`
-and `validate_device`, the latter with `on_warning`, so a warning
-reaches the stream while the run happens and the result carries it
-afterwards.
+and `validate_device`, the latter with `on_warning` in `json-stream`, so
+a warning reaches the stream while the run happens and the result
+carries it afterwards — in `human` and under `-o json` the result is the
+one place it is said.
 Document: `ValidationResult.to_dict()` — `{ok, file, diagnostics,
 model}`, one `diagnostics` list holding errors and warnings together,
 each with its `severity`.
