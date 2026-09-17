@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from mcuhome.model.errors import MCUHomeError
+from mcuhome.workbench.api import MCUHomeError
 
 from mcuhome.cli.output import Output
 
