@@ -28,9 +28,6 @@ from mcuhome.cli.parser import build_parser
 #: commands stay this way — flashing and the one-time board preparation
 #: wait on platform work — and the rest are commands still being written.
 REFUSING = {
-    "device print-schema",
-    "device list-boards",
-    "device list-supported",
     "device flash",
     "device install-bootloader",
     "secret list-scopes",

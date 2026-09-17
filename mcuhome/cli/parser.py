@@ -45,6 +45,7 @@ from mcuhome.cli import (
     buildcommand,
     configcommands,
     devicecommands,
+    devicedata,
     optionflags,
     projectcommands,
 )
@@ -403,21 +404,21 @@ def _device(sub: _Area) -> None:
     schema = sub.command(
         "print-schema",
         _("the JSON Schema of a device file"),
-        refuses("device print-schema", waits_on=_NOT_YET),
+        devicedata.device_print_schema,
     )
     _finish(schema)
 
     boards = sub.command(
         "list-boards",
         _("the boards MCUHome can build for"),
-        refuses("device list-boards", waits_on=_NOT_YET),
+        devicedata.device_list_boards,
     )
     _finish(boards)
 
     supported = sub.command(
         "list-supported",
         _("everything MCUHome knows about hardware and Matter"),
-        refuses("device list-supported", waits_on=_NOT_YET),
+        devicedata.device_list_supported,
     )
     _finish(supported)
 
