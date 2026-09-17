@@ -246,6 +246,14 @@ class Output:
         """A warning: *problem* is a plain sentence, the prefix is ours."""
         self.log(f"{self.style(_('Warning:'), YELLOW, BOLD)} {problem}")
 
+    def problem(self, sentence: str) -> None:
+        """An error-severity finding: the same line, said as what it is.
+
+        A finding carries its severity, and a run that prints "Warning:"
+        over an error is a run a person reads past.
+        """
+        self.log(f"{self.style(_('Error:'), RED, BOLD)} {sentence}")
+
     # -- the machine modes --------------------------------------------
 
     def start(self, task: str, **data: Any) -> None:
@@ -268,16 +276,21 @@ class Output:
     def finding(self, finding: Mapping[str, Any]) -> None:
         """One non-fatal finding, in the shape the mode carries it.
 
-        A warning reaches a person as one line on stderr and a stream as
+        A finding reaches a person as one line on stderr and a stream as
         a ``diagnostic`` message. Under ``-o json`` it goes to stderr as
         text as well, because a document is printed once and only the
         results that declare a ``diagnostics`` list can carry one — for
-        every other command the stderr line is where the finding is.
+        every other command the stderr line is where the finding is. The
+        line says which severity it is, because a finding carries one.
         """
         if self.mode == JSON_STREAM:
             self._event({"verb": "diagnostic", "diagnostic": dict(finding)})
             return
-        self.warn(self._sentence(finding))
+        sentence = self._sentence(finding)
+        if finding.get("severity") == "error":
+            self.problem(sentence)
+            return
+        self.warn(sentence)
 
     def wait(self, *, retry_after: float | None, waited: float, attempt: int) -> None:
         """The ``wait`` verb: a build server has no room yet.

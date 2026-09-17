@@ -230,7 +230,14 @@ def _build_holding_the_directory(
         output.result({"ok": False, "build": result.to_dict(), "signing": None, "footprint": []})
         return EXIT_FAILURE
 
-    footprint = _footprint(out_dir / result.report)
+    footprint, unreadable = _footprint(out_dir / result.report)
+    if unreadable is not None:
+        # A build that ran, delivered and may still be signed is answered
+        # whatever its report turns out to be: a report this version
+        # cannot read is a finding beside the document, not a refusal
+        # that hides everything the run did. `build.report` still names
+        # the file, so a person knows which one to look at.
+        output.finding(unreadable)
     signing = None
     if invocation.flag("sign") is not False:
         signing = _sign(invocation, model, out_dir, settings=settings, project=project)
@@ -393,9 +400,21 @@ def _sign(
     )
 
 
-def _footprint(report_path: Path) -> tuple[api.MemoryRegion, ...]:
-    """What the build report measured, or nothing where it measured none."""
-    return api.memory_footprint(api.read_build_report(report_path))
+def _footprint(
+    report_path: Path,
+) -> tuple[tuple[api.MemoryRegion, ...], dict[str, Any] | None]:
+    """What the build report measured, and what stopped it being read.
+
+    A report that is missing, unreadable or of a version this MCUHome
+    does not speak answers no regions and one finding — the workbench's
+    own words, in the one finding document. The build itself is not in
+    question: it produced what it declared, and a footprint is what a
+    person reads afterwards.
+    """
+    try:
+        return api.memory_footprint(api.read_build_report(report_path)), None
+    except api.MCUHomeError as unreadable:
+        return (), {"severity": api.SEVERITY_ERROR, **unreadable.to_dict()}
 
 
 def _max_wait_seconds(invocation: Invocation) -> float:

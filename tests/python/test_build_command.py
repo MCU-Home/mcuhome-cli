@@ -639,6 +639,96 @@ class TestStopping:
         assert signal.getsignal(signal.SIGINT) is before
 
 
+class TestTheReportItCannotRead:
+    """A build that delivered is answered whatever its report turns out to be."""
+
+    @staticmethod
+    def _break(device: Path, *, text: str | None) -> Path:
+        """Replace what the fake delivers with a report nobody can read."""
+        out_dir = device / "build" / "kitchen"
+
+        async def fake(request: api.BuildRequest, *, target: Any = None) -> api.BuildResult:
+            built = FakeBuild()
+            result = await built(request, target=target)
+            report = request.out_dir / api.BUILD_REPORT_FILE
+            if text is None:
+                report.unlink()
+            else:
+                report.write_text(text, encoding="utf-8")
+            return result
+
+        return out_dir, fake  # type: ignore[return-value]
+
+    def test_a_missing_report_is_a_finding_and_not_a_refusal(
+        self,
+        device: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        out_dir, fake = self._break(device, text=None)
+        monkeypatch.setattr(api, "build_firmware", fake)
+        assert main(["device", "build", "kitchen", "-o", "json"]) == 0
+        captured = capsys.readouterr()
+        document = json.loads(captured.out)
+        # The build ran, delivered and was signed; only the footprint is
+        # missing, and the document still names the report.
+        assert list(document) == ["ok", "build", "signing", "footprint"]
+        assert document["ok"] is True
+        assert document["footprint"] == []
+        assert document["build"]["report"] == api.BUILD_REPORT_FILE
+        assert document["signing"]["ok"] is True
+        assert str(out_dir / api.BUILD_REPORT_FILE) in captured.err
+
+    def test_a_report_of_another_version_is_a_finding_too(
+        self,
+        device: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _out_dir, fake = self._break(device, text=json.dumps({"report": 99, "signing": {}}))
+        monkeypatch.setattr(api, "build_firmware", fake)
+        assert main(["device", "build", "kitchen", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert document["ok"] is True
+        assert document["footprint"] == []
+
+    def test_it_arrives_as_one_diagnostic_message_in_the_stream(
+        self,
+        device: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _out_dir, fake = self._break(device, text=None)
+        monkeypatch.setattr(api, "build_firmware", fake)
+        assert main(["device", "build", "kitchen", "-o", "json-stream"]) == 0
+        messages = _stream(capsys)
+        findings = [message for message in messages if message["verb"] == "diagnostic"]
+        assert len(findings) == 1
+        assert findings[0]["diagnostic"]["severity"] == "error"
+        assert findings[0]["diagnostic"]["kind"] == "BuildError"
+        assert messages[-1]["verb"] == "result"
+        assert messages[-1]["document"]["footprint"] == []
+
+    def test_a_person_reads_it_as_an_error_on_stderr(
+        self,
+        device: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        _out_dir, fake = self._break(device, text=None)
+        monkeypatch.setattr(api, "build_firmware", fake)
+        assert main(["device", "build", "kitchen", "--color", "never"]) == 0
+        captured = capsys.readouterr()
+        # A finding carries its severity, and the line says which it is.
+        assert "Error: MCUHome cannot read the build report" in captured.err
+        assert "Warning:" not in captured.err
+        assert "Built kitchen." in captured.out
+
+
 class TestAPersonReadsIt:
     """The human rendering, which nobody parses."""
 
