@@ -421,11 +421,21 @@ class _StopAfterCurrentMigration:
 
 
 def _stated_directory(invocation: Invocation) -> Path | None:
-    """The positional *directory*, expanded, or ``None`` where none was given."""
+    """The positional *directory* as an absolute path, or ``None``.
+
+    Expanded against the stated environment and resolved against the
+    working directory, the way the bootstrap ladder and
+    ``create_project`` resolve theirs — so every document these commands
+    answer names the project the same way, whether the directory was
+    typed, found by the upward search or not typed at all.
+    """
     stated = invocation.flag("directory")
     if stated is None:
         return None
-    return api.expand_user_path(str(stated), env=invocation.env)
+    directory = api.expand_user_path(str(stated), env=invocation.env)
+    if not directory.is_absolute():
+        directory = invocation.cwd / directory
+    return directory.resolve()
 
 
 def _project(invocation: Invocation) -> api.Project:
@@ -437,7 +447,13 @@ def _project(invocation: Invocation) -> api.Project:
     """
     stated = _stated_directory(invocation)
     if stated is not None:
-        return api.read_project(stated, require_version=False)
+        # The same ladder the flag runs through, so a directory that is
+        # not there, or is there and is no project, is refused in the
+        # same words whichever way it was named — rather than as a
+        # project file that cannot be read.
+        return api.resolve_project(
+            stated, env=invocation.env, cwd=invocation.cwd, require_version=False
+        )
     return invocation.project(require_version=False)
 
 

@@ -144,6 +144,23 @@ class TestProjectInfo:
         assert main(["project", "info", str(project), "-o", "json"]) == 0
         assert _document(capsys)["project"]["root"] == str(project)
 
+    def test_a_stated_directory_that_is_not_there_is_refused_like_the_flag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert main(["project", "info", "nope", "-o", "json"]) == 1
+        document = _document(capsys)
+        assert "does not exist" in document["errors"][0]["message"]
+
+    def test_a_stated_directory_that_is_no_project_is_refused(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "plain").mkdir()
+        assert main(["project", "info", "plain", "-o", "json"]) == 1
+        document = _document(capsys)
+        assert api.PROJECT_MARKER_FILE in document["errors"][0]["message"]
+
     def test_outside_a_project_it_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -158,6 +175,30 @@ class TestProjectInfo:
         printed = capsys.readouterr().out
         assert str(in_project) in printed
         assert "No devices yet" in printed
+
+
+class TestTheProjectItNames:
+    """One kind of value for the project's root, whichever way it was named."""
+
+    def test_every_way_of_naming_it_answers_the_same_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        roots = []
+        assert main(["project", "init", "fresh", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        assert main(["project", "init", "fresh", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        assert main(["project", "info", "fresh", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        assert main(["project", "info", "--project-dir", "fresh", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        assert main(["project", "upgrade", "fresh", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        monkeypatch.chdir(tmp_path / "fresh")
+        assert main(["project", "info", "-o", "json"]) == 0
+        roots.append(_document(capsys)["project"]["root"])
+        assert roots == [str((tmp_path / "fresh").resolve())] * len(roots)
 
 
 class TestProjectUpgrade:
@@ -253,6 +294,21 @@ class TestProjectUpgrade:
         printed = capsys.readouterr().out
         assert "Cancelled" in printed
         assert api.read_project(old_project, require_version=False).file.version == 1
+
+    def test_a_declined_run_says_no_without_refusing(
+        self,
+        old_project: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Nothing was found; it was only not done. A machine mode is
+        # never interactive, so this run is a person's — and a person
+        # reads "cancelled", not a refusal on stderr.
+        monkeypatch.setattr("builtins.input", lambda prompt="": "no")
+        assert main(["project", "upgrade", "--interactive"]) == 1
+        captured = capsys.readouterr()
+        assert "Cancelled" in captured.out
+        assert captured.err == ""
 
     def test_an_interactive_yes_migrates(
         self,
