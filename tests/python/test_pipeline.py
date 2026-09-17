@@ -6,9 +6,10 @@ An example a script is told to copy is a promise, and a promise nobody
 runs is a spelling that rots. This suite takes the invocations out of
 that section (:func:`reference.pipeline_invocations`) and holds the
 command line to them: every one of them parses with exactly the flags it
-names, the stream loop reads the keys the text tells it to read, the
-token really comes from standard input, and the exit code says what the
-document's ``ok`` says.
+names, the stream loop reads the message keys the example's own ``jq``
+programs name (:func:`reference.stream_example_reads`), the token really
+comes from standard input, and the exit code says what the document's
+``ok`` says.
 
 The one example that would take a toolchain and minutes is stubbed the
 way :mod:`test_build_command` stubs it — at the api seam — because what
@@ -204,6 +205,38 @@ class TestABuildDrivenFromAScript:
         assert built.request.builder.token == "s3cret"
 
 
+def _at(message: dict, path: tuple[str, ...]) -> object:
+    """What a message holds at *path* — the walk a `jq` key path is.
+
+    A missing key raises rather than answering ``None``: the example
+    tells a script to read exactly there, and a key that moved is the
+    failure this suite exists to find.
+    """
+    value: object = message
+    for key in path:
+        value = value[key]  # type: ignore[index]
+    return value
+
+
+def _loop(messages: list[dict]) -> dict[str, list[object]]:
+    """The example's `while read` loop, with its own key paths.
+
+    The selector and the branches come out of the reference
+    (:func:`reference.stream_example_reads`), so what is read here is
+    what the document tells a script to read — not a transcription that
+    would stay green while the reference moved.
+    """
+    selector, branches = ref.stream_example_reads()
+    assert selector == ("verb",), "the loop switches on the message's verb"
+    assert set(branches) == {"start", "progress", "result"}, "three branches, as written"
+    read: dict[str, list[object]] = {verb: [] for verb in branches}
+    for message in messages:
+        verb = _at(message, selector)
+        if isinstance(verb, str) and verb in branches:
+            read[verb].append(_at(message, branches[verb]))
+    return read
+
+
 class TestTheStreamTheExampleReads:
     """The `while read` loop of the section, applied to a real stream."""
 
@@ -216,28 +249,16 @@ class TestTheStreamTheExampleReads:
     ) -> None:
         code = main(_examples()[STREAM])
         messages = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+        read = _loop(messages)
 
-        # The loop, in Python: `jq -r .verb` picks the branch, and each
-        # branch reads exactly one place of that message.
-        steps: list[str] = []
-        stages: list[str] = []
-        verdict: object = None
-        for message in messages:
-            verb = message["verb"]
-            if verb == "start":
-                steps = message["steps"]
-            elif verb == "progress":
-                stages.append(message["stage"])
-            elif verb == "result":
-                verdict = message["document"]["ok"]
-
+        steps = read["start"][0]
         assert steps, "the start message carries the steps the loop joins"
         assert steps == list(
             api.build_steps(target=built.request.builder.target, options=built.request.options)
         )
-        assert stages, "a stage arrives as its own message"
-        assert set(stages) <= set(steps), "a stage is one of the steps, never a new word"
-        assert verdict is True
+        assert read["progress"], "a stage arrives as its own message"
+        assert set(read["progress"]) <= set(steps), "a stage is one of the steps, never a new word"
+        assert read["result"] == [True]
         assert messages[-1]["verb"] == "result", "the last line is always the result"
         assert code == 0, "the exit code says the same thing its ok does"
 
@@ -252,5 +273,5 @@ class TestTheStreamTheExampleReads:
         code = main(_examples()[STREAM])
         messages = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
         assert messages[-1]["verb"] == "result"
-        assert messages[-1]["document"]["ok"] is False
+        assert _loop(messages)["result"] == [False]
         assert code == 1

@@ -313,3 +313,34 @@ def pipeline_invocations() -> list[list[str]]:
                     break
             found.append(tokens[1:])
     return found
+
+
+def stream_example_reads() -> tuple[tuple[str, ...], dict[str, tuple[str, ...]]]:
+    """What the *In a pipeline* stream loop reads, as key paths.
+
+    The path the ``case`` switches on, and one path per branch, taken
+    out of the example's own ``jq`` programs rather than transcribed:
+    a key this reference renames is then a key the test stops finding,
+    which is the whole point of holding an example to the code.
+
+    A program that pipes its value on (``.steps | join(…)``) is read for
+    the path it starts with — what the consumer takes out of the
+    message — because what it then does with it is shell.
+    """
+    selector: tuple[str, ...] = ()
+    branches: dict[str, tuple[str, ...]] = {}
+    for command in _console_lines(
+        next(body for heading, body in sections("##") if heading == "In a pipeline")
+    ):
+        switch = re.search(r'case\s+"\$\(jq -r (\S+) <<<', command)
+        if switch is not None:
+            selector = _key_path(switch.group(1))
+        branch = re.match(r"(\w+)\)\s+jq -r (?:'([^']+)'|(\S+)) <<<", command.strip())
+        if branch is not None:
+            branches[branch.group(1)] = _key_path(branch.group(2) or branch.group(3))
+    return selector, branches
+
+
+def _key_path(program: str) -> tuple[str, ...]:
+    """The keys a ``jq`` program of the examples takes out of a message."""
+    return tuple(program.split("|")[0].strip().lstrip(".").split("."))
