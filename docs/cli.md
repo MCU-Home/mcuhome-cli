@@ -416,11 +416,13 @@ wrote them.
 Where the project is, which id and layout version it carries, which
 devices it holds, and whether it needs upgrading.
 
-No flags of its own. Calls `resolve_project` with `require_version`
-off — this is the command a person runs *because* something refused
-them, so a project whose layout is too old is described rather than
-refused — or `read_project` for a stated *directory*, then
-`is_upgrading`, `plan_upgrade` and `find_devices`.
+No flags of its own. Calls `resolve_project` with `require_version` off
+and `allow_upgrading` on — whichever way the directory was named, the
+stated *directory* through the same ladder as the flag. This is the
+command a person runs *because* something refused them, so the two
+projects every other command refuses are exactly the ones it describes:
+one whose layout is too old, and one whose upgrade is running or was
+interrupted. Then `is_upgrading`, `plan_upgrade` and `find_devices`.
 Document: `{ok, project, upgrading, devices, plan}` — `project` is
 `Project.to_dict()`, `upgrading` what `is_upgrading` answered (an
 upgrade of this project is running, or was interrupted), `devices` the
@@ -863,7 +865,9 @@ A device that already has credentials is refused unless `--force`, and
 an interactive run is asked before the replacement, because a
 commissioned device stops being reachable with the codes somebody wrote
 down.
-Calls `resolve_device` and `create_pairing`.
+Calls `resolve_device` and `create_pairing`, and `read_pairing` in the
+interact phase: the question is asked where there is something to lose
+and nowhere else, so a first draw is not asked about.
 Document: `{ok, device, entry, secrets_file, pairing, replaced}` — the
 `pairing` is the same document `print-matter-pairing` answers, so a client
 shows the codes the same way whether it drew them or read them.
@@ -1563,7 +1567,7 @@ which this command line is the worked example of.
 | Command | Calls |
 |---|---|
 | `project init [<dir>]` | `is_project_root`, `read_project`, `create_project` |
-| `project info [<dir>]` | `resolve_project`, `read_project`, `is_upgrading`, `plan_upgrade`, `find_devices` |
+| `project info [<dir>]` | `resolve_project`, `is_upgrading`, `plan_upgrade`, `find_devices` |
 | `project upgrade [<dir>]` | `plan_upgrade`, `find_running_builds`, `open_upgrade_session`, `UpgradeSession.apply` |
 | `config print` | `resolve_settings` |
 | `config get <name>` | `option`, `resolve_settings`, `Settings.setting` |
@@ -1580,8 +1584,8 @@ which this command line is the worked example of.
 | `device rename <device>` | `resolve_project`, `rename_device` |
 | `device delete <device>` | `resolve_project`, `delete_device` |
 | `device print-matter-pairing <device>` | `resolve_device`, `read_pairing` |
-| `device create-matter-pairing <device>` | `resolve_device`, `create_pairing` |
-| `device print-schema` | `device_schema` |
+| `device create-matter-pairing <device>` | `resolve_device`, `read_pairing`, `create_pairing` |
+| `device print-schema` | `device_schema`, `to_json` |
 | `device list-boards` | `device_registry` |
 | `device list-supported` | `device_registry` |
 | `device flash <device>` | — (refuses) |

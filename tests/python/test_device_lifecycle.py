@@ -51,6 +51,18 @@ def _never_asked(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(builtins, "input", refuse)
 
 
+@pytest.fixture
+def exposed(device: Path) -> Path:
+    """A project whose device secrets file every user on the machine can read.
+
+    The warning a validation reports without knowing a line in the file —
+    which is the finding that shows where a live line belongs and how one
+    without a line is written.
+    """
+    (device / "secrets" / "device" / "kitchen.yaml").chmod(0o644)
+    return device
+
+
 def _break_device(project: Path, name: str) -> None:
     """Leave *name* with a configuration that cannot resolve."""
     file = project / "devices" / name / "main.yaml"
@@ -266,6 +278,39 @@ class TestDeviceValidate:
         assert main(["device", "validate", "kitchen", "--show-sensitive"]) == 0
         assert codes.manual_code in capsys.readouterr().out
 
+    def test_a_warning_is_said_once_and_where_it_can_be_read(
+        self, exposed: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The document carries every finding, so nothing says them twice.
+
+        A second line beside a document that already holds the finding is
+        noise; the stream is the one mode with a place for it *as it
+        happens*.
+        """
+        assert main(["device", "validate", "kitchen", "--color", "never"]) == 0
+        printed = capsys.readouterr()
+        assert printed.out.count("readable by other users") == 1
+        assert "readable by other users" not in printed.err
+
+        assert main(["device", "validate", "kitchen", "-o", "json"]) == 0
+        printed = capsys.readouterr()
+        assert "readable by other users" not in printed.err, "the document carries it"
+        assert json.loads(printed.out)["diagnostics"][0]["severity"] == "warning"
+
+        assert main(["device", "validate", "kitchen", "-o", "json-stream"]) == 0
+        messages = _stream(capsys)
+        live = [message for message in messages if message["verb"] == "diagnostic"]
+        assert len(live) == 1
+        assert live[0]["diagnostic"]["severity"] == "warning"
+
+    def test_a_finding_that_knows_no_line_names_the_file_alone(
+        self, exposed: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["device", "validate", "kitchen", "--color", "never"]) == 0
+        printed = capsys.readouterr().out
+        assert "secrets/device/kitchen.yaml: warning:" in printed
+        assert ":None:" not in printed
+
     def test_the_stream_starts_and_ends_with_one_result(
         self, device: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -374,6 +419,25 @@ class TestDeviceRename:
     def test_the_new_name_is_required(self, device: Path) -> None:
         assert main(["device", "rename", "kitchen"]) == 2
 
+    def test_a_path_is_refused_with_the_devices_the_project_has(
+        self, device: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # These two change what the project knows a device by, so they
+        # take the name: a path names nothing they could change.
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "main.yaml").write_bytes(
+            (device / "devices" / "kitchen" / "main.yaml").read_bytes()
+        )
+        (outside / "notes.txt").write_text("somebody's work", encoding="utf-8")
+        for stated in ("devices/kitchen", str(device / "devices" / "kitchen"), str(outside)):
+            assert main(["device", "rename", stated, "--to", "lounge", "-o", "json"]) == 1
+            document = _document(capsys)
+            assert "no device called" in document["errors"][0]["message"]
+            assert "kitchen" in document["errors"][0]["hint"]
+        assert (device / "devices" / "kitchen" / "main.yaml").is_file()
+        assert sorted(path.name for path in outside.iterdir()) == ["main.yaml", "notes.txt"]
+
     def test_a_device_nobody_has_is_a_refusal(
         self, device: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
@@ -433,6 +497,27 @@ class TestDeviceDelete:
         _answer(monkeypatch, "yes")
         assert main(["device", "delete", "kitchen", "--interactive"]) == 0
         assert not (device / "devices" / "kitchen").exists()
+
+    def test_a_path_is_refused_and_nothing_outside_the_project_is_touched(
+        self, device: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The one that used to be answered: a directory holding a
+        # main.yaml, named by an absolute path — it was emptied, removed
+        # and reported as a success.
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "main.yaml").write_bytes(
+            (device / "devices" / "kitchen" / "main.yaml").read_bytes()
+        )
+        (outside / "notes.txt").write_text("somebody's work", encoding="utf-8")
+        for stated in ("devices/kitchen", str(device / "devices" / "kitchen"), str(outside)):
+            assert (
+                main(["device", "delete", stated, "--force", "--no-interactive", "-o", "json"]) == 1
+            )
+            assert "no device called" in _document(capsys)["errors"][0]["message"]
+        assert outside.is_dir()
+        assert sorted(path.name for path in outside.iterdir()) == ["main.yaml", "notes.txt"]
+        assert (device / "devices" / "kitchen" / "main.yaml").is_file()
 
     def test_force_says_the_same_thing_inside_an_interactive_run(
         self, device: Path, monkeypatch: pytest.MonkeyPatch

@@ -30,7 +30,7 @@ typed — and a machine mode is never interactive.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from mcuhome.workbench import api
@@ -38,7 +38,17 @@ from mcuhome.workbench import api
 from mcuhome.cli.errors import RetiredSpelling, UsageError
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
-from mcuhome.cli.output import BOLD, DIM, GREEN, RED, YELLOW, Cell, Output, format_table
+from mcuhome.cli.output import (
+    BOLD,
+    DIM,
+    GREEN,
+    JSON_STREAM,
+    RED,
+    YELLOW,
+    Cell,
+    Output,
+    format_table,
+)
 from mcuhome.cli.phases import EXIT_FAILURE, EXIT_OK
 
 __all__ = [
@@ -143,13 +153,15 @@ def device_validate(invocation: Invocation) -> int:
     problems is this command's own document with ``ok`` false and the
     findings in ``diagnostics``, not a refusal — the run happened and
     the answer is no.
+
+    Every finding this run makes is in that document, so the live
+    channel is used exactly where a reader would otherwise not see one
+    until the end — the stream (:func:`_while_it_happens`).
     """
     output = invocation.output
     project, entry = _device(invocation)
     invocation.start()
-    validation = api.validate_device(
-        entry, project=project, on_warning=lambda finding: output.finding(finding.to_dict())
-    )
+    validation = api.validate_device(entry, project=project, on_warning=_while_it_happens(output))
     _print_validation(
         validation,
         entry=entry,
@@ -504,6 +516,21 @@ def _directories_to_clean(invocation: Invocation) -> list[tuple[str, Path]]:
     return [(name, _build_dir(project, name))]
 
 
+def _while_it_happens(output: Output) -> Callable[[api.Diagnostic], None] | None:
+    """The callback that reports a finding as it is found, where that helps.
+
+    A finding the command's own document carries needs no second line
+    beside it: under ``json`` the document is printed, and in ``human``
+    the findings are rendered out of the result. The stream is the one
+    mode with a place for a finding *while the run happens* — the
+    ``diagnostic`` message — so that is where the live channel is used,
+    and everywhere else there is none.
+    """
+    if output.mode != JSON_STREAM:
+        return None
+    return lambda finding: output.finding(finding.to_dict())
+
+
 def _answered_yes(question: str) -> bool:
     """One typed answer, and nothing but ``yes`` is one."""
     try:
@@ -579,17 +606,17 @@ def _print_new(created: api.NewDevice, *, output: Output) -> None:
     )
     output.human()
     output.human(output.heading(_("Next:")))
-    output.human(
-        _("  mcuhome device create-matter-pairing {name}    draw its commissioning codes").format(
-            name=created.name
-        )
-    )
-    output.human(
-        _("  mcuhome device validate {name}        see what it resolves to").format(
-            name=created.name
-        )
-    )
-    output.human(_("  mcuhome device build {name}           compile it").format(name=created.name))
+    # Aligned by the table rather than by spaces counted against one
+    # example name: the commands carry the device's own.
+    rows: list[list[str | Cell]] = [
+        [
+            f"mcuhome device create-matter-pairing {created.name}",
+            _("draw its commissioning codes"),
+        ],
+        [f"mcuhome device validate {created.name}", _("see what it resolves to")],
+        [f"mcuhome device build {created.name}", _("compile it")],
+    ]
+    output.human(format_table(rows, indent="  ", output=output))
     output.human()
     output.human(
         output.muted(
@@ -639,9 +666,16 @@ def _finding_lines(finding: dict[str, object], *, output: Output) -> str:
     The same two-line shape a refusal is rendered in — the fix on its own
     line rather than run into the sentence, because a hint is what a
     person acts on and a paragraph is what they skip.
+
+    A finding knows a file more often than it knows a line in it: the
+    file alone is where it is then, never a line called ``None``.
     """
     warning = finding["severity"] == "warning"
-    where = f"{finding['file']}:{finding['line']}: " if finding["file"] else ""
+    where = ""
+    if finding["file"]:
+        where = (
+            f"{finding['file']}:{finding['line']}: " if finding["line"] else f"{finding['file']}: "
+        )
     severity = output.style(
         _("warning") if warning else _("error"), YELLOW if warning else RED, BOLD
     )
