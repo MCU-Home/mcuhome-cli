@@ -41,7 +41,13 @@ from typing import Any
 
 from mcuhome.workbench import api
 
-from mcuhome.cli import buildcommand, configcommands, devicecommands, optionflags, projectcommands
+from mcuhome.cli import (
+    buildcommand,
+    configcommands,
+    devicecommands,
+    optionflags,
+    projectcommands,
+)
 from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
@@ -263,7 +269,7 @@ def _config(sub: _Area) -> None:
 
 
 def _device(sub: _Area) -> None:
-    new = sub.command("new", _("write a new device"), refuses("device new", waits_on=_NOT_YET))
+    new = sub.command("new", _("write a new device"), devicecommands.device_new)
     _positional(new, "device", help=_("the device's name"))
     _value(new, "--board", metavar="BOARD", required=True, help=_("the board it is built for"))
     _value(new, "--friendly-name", metavar="NAME", help=_("what a controller shows"))
@@ -271,9 +277,7 @@ def _device(sub: _Area) -> None:
     _finish(new)
 
     listing = sub.command(
-        "list",
-        _("the project's devices with their state"),
-        refuses("device list", waits_on=_NOT_YET),
+        "list", _("the project's devices with their state"), devicecommands.device_list
     )
     _finish(listing)
 
@@ -282,9 +286,7 @@ def _device(sub: _Area) -> None:
     _finish(info)
 
     validate = sub.command(
-        "validate",
-        _("check a device configuration"),
-        refuses("device validate", waits_on=_NOT_YET),
+        "validate", _("check a device configuration"), devicecommands.device_validate
     )
     _positional(validate, "device", help=_("device name or path"))
     _switch(validate, "--show-sensitive", help=_("print the commissioning credentials"))
@@ -352,26 +354,19 @@ def _device(sub: _Area) -> None:
     sign.set_defaults(validate=devicecommands.validate_sign_firmware)
     _finish(sign)
 
-    clean = sub.command(
-        "clean",
-        _("remove what a build produced"),
-        refuses("device clean", waits_on=_NOT_YET),
-    )
+    clean = sub.command("clean", _("remove what a build produced"), devicecommands.device_clean)
     _positional(clean, "device", optional=True, help=_("device name or path"))
     _switch(clean, "--all", help=_("every device of the project"))
+    clean.set_defaults(validate=devicecommands.validate_clean)
     _finish(clean)
 
-    rename = sub.command(
-        "rename", _("rename a device"), refuses("device rename", waits_on=_NOT_YET)
-    )
-    _positional(rename, "device", help=_("device name or path"))
+    rename = sub.command("rename", _("rename a device"), devicecommands.device_rename)
+    _positional(rename, "device", help=_("the device's name"))
     _value(rename, "--to", metavar="NAME", required=True, help=_("the new name"))
     _finish(rename)
 
-    delete = sub.command(
-        "delete", _("remove a device"), refuses("device delete", waits_on=_NOT_YET)
-    )
-    _positional(delete, "device", help=_("device name or path"))
+    delete = sub.command("delete", _("remove a device"), devicecommands.device_delete)
+    _positional(delete, "device", help=_("the device's name"))
     _switch(
         delete,
         "--keep-secrets",
@@ -379,12 +374,13 @@ def _device(sub: _Area) -> None:
         negated=_("remove the device's secrets file as well (the default)"),
     )
     _switch(delete, "--force", help=_("do not ask, even in an interactive run"))
+    delete.set_defaults(interact=devicecommands.ask_before_deleting)
     _finish(delete)
 
     print_pairing = sub.command(
         "print-matter-pairing",
         _("a device's commissioning credentials"),
-        refuses("device print-matter-pairing", waits_on=_NOT_YET),
+        devicecommands.device_print_matter_pairing,
     )
     _positional(print_pairing, "device", help=_("device name or path"))
     _finish(print_pairing)
@@ -392,7 +388,7 @@ def _device(sub: _Area) -> None:
     create_pairing = sub.command(
         "create-matter-pairing",
         _("draw commissioning credentials"),
-        refuses("device create-matter-pairing", waits_on=_NOT_YET),
+        devicecommands.device_create_matter_pairing,
     )
     _positional(create_pairing, "device", help=_("device name or path"))
     _switch(
@@ -401,6 +397,7 @@ def _device(sub: _Area) -> None:
         help=_("replace credentials it already has"),
         negated=_("refuse credentials that are already there (the default)"),
     )
+    create_pairing.set_defaults(interact=devicecommands.ask_before_replacing_pairing)
     _finish(create_pairing)
 
     schema = sub.command(

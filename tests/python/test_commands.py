@@ -24,18 +24,10 @@ from mcuhome.cli.main import main
 from mcuhome.cli.output import Output
 from mcuhome.cli.parser import build_parser
 
-#: What this version of the command line cannot do yet. Two of them stay
-#: this way — flashing and the one-time board preparation wait on
-#: platform work — and the rest are commands still being written.
+#: What this version of the command line cannot do yet. The two device
+#: commands stay this way — flashing and the one-time board preparation
+#: wait on platform work — and the rest are commands still being written.
 REFUSING = {
-    "device new",
-    "device list",
-    "device validate",
-    "device clean",
-    "device rename",
-    "device delete",
-    "device print-matter-pairing",
-    "device create-matter-pairing",
     "device print-schema",
     "device list-boards",
     "device list-supported",

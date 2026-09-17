@@ -275,6 +275,13 @@ were told — the command was typed, and a script is a person who already
 decided — and `device delete --force` says the same thing inside an
 interactive run.
 
+A person who **declines** ends the run there: nothing was done, and the
+exit code is 1 like every other answer of "no". Only they ever see it —
+a machine mode is never interactive, so there is no reader waiting for a
+document — and the sentence on stdout is the whole answer. `project
+upgrade` is the one of the three that has a document to answer with
+anyway, and answers it.
+
 **What the command line decides.** It decides what to show and what to
 ask. It decides nothing about MCUHome: which builder a build runs at,
 whether a host can build, what a context pins, whether a file is a key —
@@ -543,9 +550,15 @@ A device of a project is a folder under `devices/`, and the folder is
 the device's name: `devices/kitchen/main.yaml` states `name: kitchen`,
 its build output is `build/kitchen/`, its secrets are
 `secrets/device/kitchen.yaml`, its patches are
-`devices/kitchen/patches/`. Every command below takes that name as its
-positional, or a path — a device folder, or a device file, including one
-that lies outside any project.
+`devices/kitchen/patches/`. Every command below that **reads** a device
+takes that name as its positional, or a path — a device folder, or a
+device file, including one that lies outside any project.
+
+The three that change what the **project** knows take the name alone:
+`device new` names a device that does not exist yet, and `device rename`
+and `device delete` move and remove the project's own record of one — a
+path to a file somewhere else names nothing either of them could change,
+and is refused with the devices the project has.
 
 ### `mcuhome device new <device> --board <board>`
 Writes a new device folder with a starter configuration.

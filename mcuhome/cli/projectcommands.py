@@ -31,10 +31,11 @@ from typing import Any
 
 from mcuhome.workbench import api
 
+from mcuhome.cli import devicecommands
 from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
-from mcuhome.cli.output import BOLD, GREEN, YELLOW, Cell, Output, format_table
+from mcuhome.cli.output import BOLD, GREEN, YELLOW, Output
 from mcuhome.cli.phases import EXIT_FAILURE, EXIT_OK
 
 __all__ = [
@@ -104,7 +105,7 @@ def project_info(invocation: Invocation) -> int:
         for migration in plan:
             output.human(f"  {migration.to_version}. {migration.description}")
     output.human()
-    output.human(_print_devices(devices, output=output))
+    output.human(devicecommands.format_devices(devices, output=output))
     output.result(
         {
             "ok": True,
@@ -506,19 +507,3 @@ def _print_details(applied: Sequence[api.Migration], *, output: Output) -> None:
         output.human(output.heading(migration.description))
         for line in migration.details.splitlines():
             output.human(f"  {line}" if line else "")
-
-
-def _print_devices(devices: Sequence[api.DeviceRecord], *, output: Output) -> str:
-    """The project's devices, or the line that says it has none."""
-    if not devices:
-        return _("No devices yet — mcuhome device new <name> writes one.")
-    rows: list[list[str | Cell]] = [[_("device"), _("board"), _("problems")]]
-    for device in devices:
-        rows.append(
-            [
-                device.name,
-                device.board,
-                Cell(str(device.problems), () if device.ok else (YELLOW,)),
-            ]
-        )
-    return format_table(rows, header=True, output=output)
