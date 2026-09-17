@@ -12,11 +12,13 @@ discipline for all of them:
     stdout carries **exactly one** JSON document, emitted when the run
     is over. Failure form: ``{"ok": false, "errors": [...]}``.
 ``json-stream``
-    NDJSON — one JSON message per line, as the run progresses. Four
-    verbs for now: ``start``, ``progress``, ``error``, ``result``; the
-    ``result`` message carries the same document ``-o json`` would have
-    printed, under its ``document`` key. The verb vocabulary is
-    append-only and consumers must ignore verbs they do not know.
+    NDJSON — one JSON message per line, as the run progresses. Seven
+    verbs: ``start``, ``progress``, ``diagnostic``, ``wait``,
+    ``stopping``, ``error`` and ``result``; the ``result`` message
+    carries the same document ``-o json`` would have printed, under its
+    ``document`` key, and every run ends with exactly one of them. The
+    verb vocabulary is append-only and consumers must ignore verbs they
+    do not know.
 
 Whatever the mode, stdout belongs to the document or the human
 rendering and to nothing else: logs, warnings and rendered errors go to
@@ -31,6 +33,14 @@ Interactivity is resolved here too, because the machine modes force it:
 ``-o json``/``-o json-stream`` are non-interactive whatever a flag says
 (a consumer parsing NDJSON cannot answer a question), the explicit
 flags decide otherwise, and the default is TTY detection.
+
+Saying no has two shapes and they are told apart by the keys. A
+**refusal** replaces the command's document with ``{"ok": false,
+"errors": [...]}`` and carries none of the command's own keys
+(:meth:`Output.errors`); a **negative answer** is the command's own
+document with ``ok`` false and its findings in ``diagnostics``, which is
+the command's to compose out of the result it was given. The two lists
+are never merged and never both present.
 """
 
 from __future__ import annotations
@@ -39,11 +49,11 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from mcuhome.model.errors import MCUHomeError
+from mcuhome.workbench.api import MCUHomeError, error_dicts
 
 from mcuhome.cli.i18n import _
 
@@ -185,6 +195,9 @@ class Output:
     mode: str = HUMAN
     color: bool = False
     interactive: bool = False
+    #: The documents answered so far — a run has one, and the list is
+    #: what makes a second one a refusal rather than a silent overwrite.
+    _results: list[Any] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def machine(self) -> bool:
@@ -236,23 +249,85 @@ class Output:
     # -- the machine modes --------------------------------------------
 
     def start(self, task: str, **data: Any) -> None:
-        """The ``start`` verb: *task* begins (``json-stream`` only)."""
+        """The ``start`` verb: *task* begins (``json-stream`` only).
+
+        *task* is the command as typed without its flags — ``"device
+        build"``, ``"config print"``, ``"version"`` for the one command
+        that has no area.
+        """
         self._event({"verb": "start", "task": task, **data})
 
     def progress(self, stage: str, **data: Any) -> None:
-        """The ``progress`` verb: an honest stage, never an invented percentage."""
+        """The ``progress`` verb: an honest stage, never an invented percentage.
+
+        *stage* is the workbench's own step vocabulary and never a word
+        this command line made up.
+        """
         self._event({"verb": "progress", "stage": stage, **data})
 
-    def error(self, entry: dict[str, Any]) -> None:
+    def finding(self, finding: Mapping[str, Any]) -> None:
+        """One non-fatal finding, in the shape the mode carries it.
+
+        A warning reaches a person as one line on stderr and a stream as
+        a ``diagnostic`` message. Under ``-o json`` it goes to stderr as
+        text as well, because a document is printed once and only the
+        results that declare a ``diagnostics`` list can carry one — for
+        every other command the stderr line is where the finding is.
+        """
+        if self.mode == JSON_STREAM:
+            self._event({"verb": "diagnostic", "diagnostic": dict(finding)})
+            return
+        self.warn(self._sentence(finding))
+
+    def wait(self, *, retry_after: float | None, waited: float, attempt: int) -> None:
+        """The ``wait`` verb: a build server has no room yet.
+
+        A verb rather than a stage because the build has not started and
+        may never start.
+        """
+        self._event(
+            {"verb": "wait", "retry_after": retry_after, "waited": waited, "attempt": attempt}
+        )
+
+    def stopping(self, *, seconds: float | None) -> None:
+        """The ``stopping`` verb: a stop was requested, with the bound it may take.
+
+        *seconds* is ``None`` where the run has no time to state — an
+        upgrade stops after the migration it is in, and how long that one
+        takes is not a number anybody has.
+        """
+        self._event({"verb": "stopping", "seconds": seconds})
+
+    def error(self, entry: Mapping[str, Any]) -> None:
         """The ``error`` verb: one serialized error, as it happens."""
-        self._event({"verb": "error", "error": entry})
+        self._event({"verb": "error", "error": dict(entry)})
 
     def result(self, document: Any) -> None:
-        """The final document: the one ``-o json`` print, or the ``result`` verb."""
+        """The final document: the one ``-o json`` print, or the ``result`` verb.
+
+        Exactly one per machine run. A second call is a defect in the
+        command, not a case to render: two documents on stdout are what
+        no consumer can parse.
+        """
+        if self._results:
+            raise RuntimeError("a command answered twice; a run has one result")
+        self._results.append(document)
         if self.mode == JSON:
             print(json.dumps(document, indent=2))
         elif self.mode == JSON_STREAM:
             self._event({"verb": "result", "document": document})
+
+    @property
+    def answered(self) -> bool:
+        """Whether the run has already printed its document."""
+        return bool(self._results)
+
+    @staticmethod
+    def _sentence(finding: Mapping[str, Any]) -> str:
+        """A finding as one line: what it is, and the fix where there is one."""
+        message = str(finding.get("message", ""))
+        hint = finding.get("hint")
+        return f"{message} {hint}" if hint else message
 
     def _event(self, message: dict[str, Any]) -> None:
         # One message per line, flushed as it happens: a live consumer is
@@ -280,7 +355,7 @@ class Output:
             for problem in problems:
                 self.log(self._render(problem, base))
             return
-        entries = [entry for problem in problems for entry in problem.to_dicts(root=root)]
+        entries = [entry for problem in problems for entry in error_dicts(problem, root=root)]
         for entry in entries:
             self.error(entry)
         self.result({"ok": False, "errors": entries})
