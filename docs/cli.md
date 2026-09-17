@@ -419,12 +419,16 @@ non-interactive run without `--confirm` is refused, and the refusal
 names the id to pass. Resolves the project with `require_version` off,
 like `project info` — the projects this command exists for are exactly
 the ones every other command refuses. Calls `plan_upgrade`,
-`find_running_builds`, `open_upgrade_session` and
+`open_upgrade_session`, `UpgradeSession.running_builds` (which is
+`find_running_builds` on the session's project) and
 `UpgradeSession.apply`, the last with `on_step` — one
 `migration_started` and, once that migration is through, one
 `migration_done`, both naming the migration and the two versions, both
 reaching the stream as `progress` — and `should_stop`, which a stop
-between migrations answers.
+between migrations answers. A stop that was asked for reaches a machine
+run as one `stopping` message whose `seconds` is `null`: the bound of
+this stop is the migration that is running, and how long that one takes
+is not a number anybody has.
 
 **Two ways it can end badly, and they leave different projects.** A
 migration that refuses before it has changed anything leaves the project
@@ -488,9 +492,9 @@ is refused here rather than at the next build.
 |---|---|---|
 | `--scope` | `project` (default), `user`, `system` | `resolve_config_file(scope=…)` |
 
-Outside a project the default scope has no file: the command refuses,
-naming `--scope user` and `--scope system` as the two that do not need
-one.
+Outside a project the default scope has no file, and the refusal is the
+workbench's: it names `mcuhome project init` and the user and system
+configuration, which are the two scopes a project is not needed for.
 A list value is written as one string separated by the kind's separator:
 paths by the platform's path separator, names by a comma.
 Calls `resolve_config_file` and `set_config_value`.
