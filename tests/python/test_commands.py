@@ -1,383 +1,308 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The commands the vocabulary step added.
+"""``version`` and ``config``, in all three modes.
 
-``config`` (print/get/set/unset over the five configuration layers),
-``device list``, ``doctor``, the honest stubs, and ``device new
---name``. The build-selection rungs have their own section in
-``test_cli.py``; here it is the new surface itself.
+The commands run against a real project and the real workbench: a mock
+of a call that is this cheap would be a test of the mock. What the suite
+closes off is a child process and a socket (``conftest``), and no
+command here needs either.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-from conftest import VALID_CONFIG, make_project
-from mcuhome.model.errors import BuildError
+import pytest
+from mcuhome.workbench import api
 
-from mcuhome.cli import main as cli
+from mcuhome.cli import __version__ as command_line_version
+from mcuhome.cli.invocation import Invocation
 from mcuhome.cli.main import main
-
-BOARD = "nrf7002dk/nrf5340/cpuapp"
-
-
-def _project_with_device(tmp_path: Path) -> Path:
-    project = make_project(tmp_path / "project")
-    (project / "devices" / "bench-node").mkdir(parents=True)
-    (project / "devices" / "bench-node" / "main.yaml").write_text(VALID_CONFIG, encoding="utf-8")
-    return project
+from mcuhome.cli.output import Output
+from mcuhome.cli.parser import build_parser
 
 
-# --------------------------------------------------------------------------
-# config
-# --------------------------------------------------------------------------
+def _document(capsys: pytest.CaptureFixture[str]) -> dict:
+    return json.loads(capsys.readouterr().out)
 
 
-def test_config_set_get_print_unset_round_trip(tmp_path, capsys, monkeypatch) -> None:
-    """One value through all four verbs, in the project scope (the default).
+def _stream(capsys: pytest.CaptureFixture[str]) -> list[dict]:
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
 
-    ``build.sdk_max_bytes`` stands in for the retired top-level ``jobs``
-    option: an integer, nested under ``build:`` — which is also what
-    proves a dotted key of one area writes that area's own section.
+
+class TestVersion:
+    def test_it_answers_the_command_line_and_the_stack(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["version", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert list(document) == ["ok", "command_line", "stack"]
+        assert document["command_line"] == command_line_version
+        assert document["stack"] == api.stack_versions()
+
+    def test_the_stream_starts_and_ends(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["version", "-o", "json-stream"]) == 0
+        messages = _stream(capsys)
+        assert [message["verb"] for message in messages] == ["start", "result"]
+        assert messages[0] == {"verb": "start", "task": "version"}
+
+    def test_a_person_reads_one_line_per_package(self, capsys: pytest.CaptureFixture[str]) -> None:
+        assert main(["version"]) == 0
+        printed = capsys.readouterr().out.splitlines()
+        assert printed[0] == f"mcuhome-cli {command_line_version}"
+        assert len(printed) == 1 + len(api.stack_versions())
+
+
+class TestConfigPrint:
+    def test_it_answers_every_declared_option(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "print", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert list(document) == ["ok", "config"]
+        # One entry per declared option except the bootstrap one.
+        assert set(document["config"]) == {
+            option.name for option in api.OPTIONS if not option.bootstrap
+        }
+        assert document["config"]["build.mode"] == {
+            "value": "container",
+            "origin": "default",
+            "source": None,
+        }
+
+    def test_it_works_outside_a_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert main(["config", "print", "-o", "json"]) == 0
+        assert _document(capsys)["ok"] is True
+
+    def test_a_document_carries_no_escape_code(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "print", "--color", "always", "-o", "json"]) == 0
+        printed = capsys.readouterr().out
+        assert "\x1b" not in printed and "\\u001b" not in printed
+
+    def test_a_person_reads_a_table(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "print"]) == 0
+        printed = capsys.readouterr().out
+        assert "build.mode" in printed
+        assert "container" in printed
+
+
+class TestConfigGet:
+    def test_it_answers_one_value_with_its_layer(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "get", "build.target", "-o", "json"]) == 0
+        assert _document(capsys) == {
+            "ok": True,
+            "name": "build.target",
+            "value": "local",
+            "origin": "default",
+            "source": None,
+        }
+
+    def test_it_answers_a_map_entry_key(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "set", "registry.packages.example.org.untrusted", "true"]) == 0
+        capsys.readouterr()
+        assert main(["config", "get", "registry.packages.example.org.untrusted", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert document["value"] is True
+        assert document["origin"] == "project"
+        assert document["source"] == str(in_project / "mcuhome.yaml")
+
+    def test_a_key_nobody_declared_is_refused_before_any_layer(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "get", "build.nope", "-o", "json"]) == 1
+        document = _document(capsys)
+        assert set(document) == {"ok", "errors"}
+        assert document["errors"][0]["kind"] == "ConfigError"
+
+    def test_a_person_reads_the_value_and_where_it_came_from(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "get", "build.target"]) == 0
+        printed = capsys.readouterr().out.splitlines()
+        assert printed[0] == "local"
+        assert "default" in printed[1]
+
+
+class TestConfigSetAndUnset:
+    def test_set_writes_the_parsed_value_into_the_project_file(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "set", "build.mode", "subprocess", "-o", "json"]) == 0
+        assert _document(capsys) == {
+            "ok": True,
+            "name": "build.mode",
+            "value": "subprocess",
+            "scope": "project",
+            "file": str(in_project / "mcuhome.yaml"),
+        }
+        assert "subprocess" in (in_project / "mcuhome.yaml").read_text(encoding="utf-8")
+
+    def test_set_answers_a_path_as_the_document_spells_one(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "set", "build.cache_root", "~/caches", "-o", "json"]) == 0
+        assert isinstance(_document(capsys)["value"], str)
+
+    def test_set_refuses_a_value_the_declaration_does_not_take(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The value is a positional rather than a flag's, so it is the
+        # command running and saying no: exit 1.
+        assert main(["config", "set", "build.mode", "sideways", "-o", "json"]) == 1
+        assert _document(capsys)["errors"][0]["kind"] == "ConfigError"
+
+    def test_set_refuses_outside_a_project_for_the_default_scope(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        assert main(["config", "set", "build.mode", "subprocess", "-o", "json"]) == 1
+        hint = _document(capsys)["errors"][0]["hint"]
+        assert "mcuhome project init" in hint
+
+    def test_the_user_scope_needs_no_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        code = main(["config", "set", "build.mode", "subprocess", "--scope", "user", "-o", "json"])
+        assert code == 0
+        document = _document(capsys)
+        assert document["scope"] == "user"
+        assert Path(document["file"]).is_file()
+
+    def test_unset_says_whether_anything_was_there(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "unset", "build.mode", "-o", "json"]) == 0
+        assert _document(capsys)["removed"] is False
+        assert main(["config", "set", "build.mode", "subprocess"]) == 0
+        capsys.readouterr()
+        assert main(["config", "unset", "build.mode", "-o", "json"]) == 0
+        assert _document(capsys)["removed"] is True
+
+    def test_a_scope_nobody_offers_is_a_wrong_invocation(self) -> None:
+        assert main(["config", "set", "build.mode", "subprocess", "--scope", "global"]) == 2
+
+
+class TestTheArgumentsChannel:
+    """What a flag carries reaches the configuration ladder as an argument.
+
+    ``config get`` has no option flags of its own — the reference gives
+    them to the four commands that resolve a build — so the channel is
+    driven here through the parser and the invocation, which is what
+    every one of those commands does with it.
     """
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
 
-    assert main(["config", "set", "build.sdk_max_bytes", "4096"]) == 0
-    out = capsys.readouterr().out
-    assert "Set build.sdk_max_bytes = 4096" in out
-    assert "mcuhome.yaml" in out
-    written = (project / "mcuhome.yaml").read_text(encoding="utf-8")
-    assert "build:" in written
-    assert "sdk_max_bytes: 4096" in written
+    def _invocation(self, tokens: list[str], *, cwd: Path) -> Invocation:
+        args = build_parser().parse_args(tokens)
+        return Invocation(
+            task="host check", args=args, output=Output(), env=dict(os.environ), cwd=cwd
+        )
 
-    assert main(["config", "get", "build.sdk_max_bytes"]) == 0
-    assert capsys.readouterr().out.strip() == "4096"
+    def test_a_flag_wins_over_every_file_and_names_its_spelling(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["config", "set", "build.mode", "container"]) == 0
+        capsys.readouterr()
+        invocation = self._invocation(
+            ["host", "check", "--build-mode", "subprocess"], cwd=in_project
+        )
+        settings = invocation.settings(project=invocation.find_project())
+        assert settings.setting("build.mode").to_dict() == {
+            "value": "subprocess",
+            "origin": "arguments",
+            # The spelling the person used, not a key they never wrote.
+            "source": "--build-mode",
+        }
 
-    assert main(["config", "print"]) == 0
-    printed = capsys.readouterr().out
-    assert "option" in printed and "origin" in printed
-    assert "build.sdk_max_bytes" in printed
-    assert "project" in printed
+    def test_a_flag_that_was_not_used_is_absent(self, in_project: Path) -> None:
+        invocation = self._invocation(["host", "check"], cwd=in_project)
+        assert invocation.option_arguments() == ()
 
-    assert main(["config", "unset", "build.sdk_max_bytes"]) == 0
-    assert "Removed build.sdk_max_bytes" in capsys.readouterr().out
-    assert "sdk_max_bytes" not in (project / "mcuhome.yaml").read_text(encoding="utf-8")
+    def test_a_list_flag_appends_once_per_use(self, in_project: Path) -> None:
+        invocation = self._invocation(
+            [
+                "host",
+                "check",
+                "--build-sdk-sources",
+                "/one",
+                "--build-sdk-sources",
+                "/two",
+            ],
+            cwd=in_project,
+        )
+        settings = invocation.settings(project=invocation.find_project())
+        assert settings.setting("build.sdk_sources").to_dict()["value"] == ["/one", "/two"]
 
-    assert main(["config", "unset", "build.sdk_max_bytes"]) == 0
-    assert "nothing changed" in capsys.readouterr().out
+    def test_the_bootstrap_option_is_not_an_argument(self, project: Path, tmp_path: Path) -> None:
+        # `--project-dir` decides where the project layer *is*; handing
+        # it to the layer that reads it is what that layer refuses.
+        invocation = self._invocation(
+            ["host", "check", "--project-dir", str(project)], cwd=tmp_path
+        )
+        assert invocation.option_arguments() == ()
+        assert invocation.find_project() is not None
+        assert invocation.project().root == project
 
 
-def test_config_print_answers_json_with_origins(tmp_path, capsys, monkeypatch) -> None:
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    (project / "mcuhome.yaml").write_text("build:\n  sdk_max_bytes: 4096\n", encoding="utf-8")
-    assert main(["config", "print", "-o", "json"]) == 0
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is True
-    assert document["config"]["build.sdk_max_bytes"] == {
-        "value": 4096,
-        "origin": "project",
-        "source": str(project / "mcuhome.yaml"),
-    }
+class TestWhatIsNotImplementedYet:
+    """Every command of the reference answers; some of them say no."""
 
+    @staticmethod
+    def _invocation(words: tuple[str, ...]) -> list[str]:
+        """A well-formed invocation of *words*: its positionals and required flags."""
+        import argparse
 
-def test_config_print_renders_a_registry_without_crashing(tmp_path, capsys, monkeypatch) -> None:
-    """A configured ``registry:`` used to answer with a raw ``KeyError('name')``.
+        parser = build_parser()
+        for word in words:
+            sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
+            parser = sub.choices[word]
+        tokens = list(words)
+        for action in parser._actions:
+            if not action.option_strings and action.nargs != "?":
+                tokens.append("x")
+            elif action.required and action.option_strings:
+                tokens.extend([action.option_strings[0], "x"])
+        return tokens
 
-    Every list of mappings was rendered as the builder list, and a
-    registry entry has no ``name`` — so the one command whose job is to
-    show what is configured died on a configuration it had accepted.
-    """
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    (project / "mcuhome.yaml").write_text(
-        "registry:\n"
-        "  packages.example.org:\n"
-        "    untrusted: true\n"
-        "    anchor: secrets/trust-anchor/packages.example.org.json\n"
-        "    mirrors:\n"
-        "      sdk:\n"
-        "        - /srv/mirror/one\n"
-        "        - https://mirror-2.example.org/sdk/\n",
-        encoding="utf-8",
+    @pytest.mark.parametrize(
+        "words",
+        [
+            ("device", "new"),
+            ("device", "list"),
+            ("device", "build"),
+            ("device", "sign-firmware"),
+            ("device", "clean"),
+            ("device", "print-schema"),
+            ("device", "flash"),
+            ("device", "install-bootloader"),
+            ("secret", "list"),
+            ("secret", "reveal"),
+            ("signing", "create-key"),
+            ("context", "verify"),
+            ("environment", "provision"),
+            ("host", "check"),
+        ],
+        ids=lambda words: " ".join(words),
     )
-    assert main(["config", "print"]) == 0
-    printed = capsys.readouterr().out
-    assert "packages.example.org" in printed
-    assert "untrusted" in printed
-    assert f"anchor {project / 'secrets/trust-anchor/packages.example.org.json'}" in printed
-    # Mirrors are URLs as often as directories, so they are not joined
-    # with os.pathsep: two `https://` entries and a colon read as one
-    # broken address.
-    assert "mirrors sdk: /srv/mirror/one, https://mirror-2.example.org/sdk/" in printed
-
-
-def test_config_print_renders_a_builder_with_its_layer(tmp_path, capsys, monkeypatch) -> None:
-    """The builders branch stays pinned to ``name (type, layer)``."""
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    (project / "mcuhome.yaml").write_text(
-        "builders:\n  - name: attic\n    type: remote\n    server: 10.0.0.5:8291\n",
-        encoding="utf-8",
-    )
-    assert main(["config", "print"]) == 0
-    printed = capsys.readouterr().out
-    assert "attic (remote, project)" in printed
-
-
-def test_config_set_writes_the_user_scope_file(tmp_path, capsys, monkeypatch) -> None:
-    """--user writes configuration.yaml under XDG_CONFIG_HOME, project or not."""
-    monkeypatch.chdir(tmp_path)
-    assert main(["config", "set", "--user", "default_builder", "attic", "-o", "json"]) == 0
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is True and document["scope"] == "user"
-    file = Path(document["file"])
-    assert file.name == "configuration.yaml"
-    assert "default_builder: attic" in file.read_text(encoding="utf-8")
-
-
-def test_config_set_in_the_project_scope_needs_a_project(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert main(["config", "set", "jobs", "4"]) == 1
-    err = capsys.readouterr().err
-    assert "no project here" in err
-    assert "mcuhome project init" in err
-
-
-def test_config_refuses_what_a_file_may_not_carry(tmp_path, capsys, monkeypatch) -> None:
-    """The channel rules and the structured-value rule, through the command."""
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    assert main(["config", "set", "signing_key", "/k"]) == 1
-    assert "cannot be set from a configuration file" in capsys.readouterr().err
-    assert main(["config", "set", "builders", "attic"]) == 1
-    assert "structured configuration" in capsys.readouterr().err
-    assert main(["config", "get", "jobz"]) == 1
-    assert "no option called 'jobz'" in capsys.readouterr().err
-    before = (project / "mcuhome.yaml").read_text(encoding="utf-8")
-    assert main(["config", "unset", "jobz"]) == 1
-    assert "no option called 'jobz'" in capsys.readouterr().err
-    assert (project / "mcuhome.yaml").read_text(encoding="utf-8") == before
-
-
-# --------------------------------------------------------------------------
-# device list
-# --------------------------------------------------------------------------
-
-
-def test_list_outside_a_project_refuses_toward_init(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-    assert main(["device", "list"]) == 1
-    err = capsys.readouterr().err
-    assert "mcuhome project init" in err
-
-
-def test_list_an_empty_project_names_the_next_step(tmp_path, capsys, monkeypatch) -> None:
-    project = make_project(tmp_path / "project")
-    monkeypatch.chdir(project)
-    assert main(["device", "list"]) == 0
-    out = capsys.readouterr().out
-    assert "No devices yet" in out
-    assert "mcuhome device new" in out
-
-
-def test_list_shows_validation_and_build_state(tmp_path, capsys, monkeypatch) -> None:
-    project = _project_with_device(tmp_path)
-    (project / "devices" / "broken-node").mkdir()
-    (project / "devices" / "broken-node" / "main.yaml").write_text(
-        "device:\n  name: broken-node\n", encoding="utf-8"
-    )
-    # bench-node has a signed container delivery, broken-node no build.
-    build_dir = project / "build" / "bench-node"
-    build_dir.mkdir(parents=True)
-    (build_dir / "build-report.json").write_text("{}", encoding="utf-8")
-    (build_dir / "firmware.signed.bin").write_bytes(b"\x00")
-    monkeypatch.chdir(project)
-
-    assert main(["device", "list"]) == 0
-    out = capsys.readouterr().out
-    assert "bench-node" in out
-    assert BOARD in out
-    assert "signed" in out
-    assert "broken-node" in out
-    assert "problem" in out
-
-    assert main(["device", "list", "-o", "json"]) == 0
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is True
-    by_name = {entry["name"]: entry for entry in document["devices"]}
-    assert by_name["bench-node"]["ok"] is True
-    assert by_name["bench-node"]["board"] == BOARD
-    assert by_name["bench-node"]["built"] is True
-    assert by_name["bench-node"]["signed"] is True
-    assert by_name["broken-node"]["ok"] is False
-    assert by_name["broken-node"]["problems"] >= 1
-    assert by_name["broken-node"]["built"] is False
-
-
-def test_list_calls_an_unsigned_delivery_unsigned(tmp_path, capsys, monkeypatch) -> None:
-    project = _project_with_device(tmp_path)
-    build_dir = project / "build" / "bench-node"
-    build_dir.mkdir(parents=True)
-    (build_dir / "build-report.json").write_text("{}", encoding="utf-8")
-    monkeypatch.chdir(project)
-    assert main(["device", "list", "-o", "json"]) == 0
-    document = json.loads(capsys.readouterr().out)
-    entry = document["devices"][0]
-    assert entry["built"] is True
-    assert entry["signed"] is False
-
-
-# --------------------------------------------------------------------------
-# doctor
-# --------------------------------------------------------------------------
-
-
-def test_doctor_reports_every_check_and_exits_zero_when_nothing_fails(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    monkeypatch.setattr(cli.container, "preflight", lambda *a, **k: None)
-    assert main(["doctor"]) == 0
-    out = capsys.readouterr().out
-    for check in ("stack", "project", "configuration", "builders", "container", "secrets"):
-        assert check in out
-    assert str(project) in out
-    assert "mcuhome-workbench" in out
-
-
-def test_doctor_marks_a_missing_container_runtime_and_exits_one(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    """One broken thing never hides the next: every check still reports."""
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-
-    def refuse(*args, **kwargs):
-        raise BuildError("MCUHome compiles in a container and cannot find docker.")
-
-    monkeypatch.setattr(cli.container, "preflight", refuse)
-    assert main(["doctor"]) == 1
-    out = capsys.readouterr().out
-    assert "fail" in out
-    assert "cannot find docker" in out
-    assert "secrets" in out  # the checks after the failure still ran
-
-
-def test_doctor_json_carries_the_checks(tmp_path, capsys, monkeypatch) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    def refuse(*args, **kwargs):
-        raise BuildError("no docker here")
-
-    monkeypatch.setattr(cli.container, "preflight", refuse)
-    assert main(["doctor", "-o", "json"]) == 1
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is False
-    by_check = {entry["check"]: entry for entry in document["checks"]}
-    assert by_check["container"]["status"] == "fail"
-    assert by_check["project"]["status"] == "warn"  # not inside a project
-
-
-def test_doctor_warns_about_exposed_secrets(tmp_path, capsys, monkeypatch) -> None:
-    project = _project_with_device(tmp_path)
-    secrets_file = project / "secrets" / "main.yaml"
-    secrets_file.write_text("wifi_password: hunter2\n", encoding="utf-8")
-    secrets_file.chmod(0o644)
-    monkeypatch.chdir(project)
-    monkeypatch.setattr(cli.container, "preflight", lambda *a, **k: None)
-    assert main(["doctor"]) == 0
-    out = capsys.readouterr().out
-    assert "warn" in out
-    assert "main.yaml" in out
-
-
-# --------------------------------------------------------------------------
-# stubs, and device new --name
-# --------------------------------------------------------------------------
-
-
-def test_flash_and_first_time_setup_refuse_in_words(tmp_path, capsys, monkeypatch) -> None:
-    """Honest stubs: a refusal naming the plan, exit 1."""
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    assert main(["device", "flash", "bench-node"]) == 1
-    err = capsys.readouterr().err
-    assert "not implemented yet" in err
-    assert "recovery" in err
-    assert main(["device", "first-time-setup", "bench-node"]) == 1
-    err = capsys.readouterr().err
-    assert "not implemented yet" in err
-    assert "bootloader" in err
-
-
-def test_device_new_takes_a_friendly_name(tmp_path, capsys, monkeypatch) -> None:
-    project = make_project(tmp_path / "project")
-    monkeypatch.chdir(project)
-    argv = ["device", "new", "bench-node", "--board", BOARD, "--name", "Workbench Node"]
-    assert main(argv) == 0
-    capsys.readouterr()
-    text = (project / "devices" / "bench-node" / "main.yaml").read_text(encoding="utf-8")
-    assert 'friendly_name: "Workbench Node"' in text
-
-
-def test_sign_firmware_takes_a_device_name_and_refuses_without_a_build(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    """The device form resolves to the last build — and says so when there is none."""
-    project = _project_with_device(tmp_path)
-    monkeypatch.chdir(project)
-    assert main(["device", "sign-firmware", "bench-node"]) == 1
-    err = capsys.readouterr().err
-    assert "has no build to sign" in err
-    assert "mcuhome device build bench-node" in err
-
-
-def test_sign_firmware_on_an_unrelated_directory_names_what_it_expected(
-    tmp_path, capsys, monkeypatch
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    empty = tmp_path / "empty"
-    empty.mkdir()
-    assert main(["device", "sign-firmware", str(empty)]) == 1
-    err = capsys.readouterr().err
-    assert "build-report.json" in err
-
-
-# --------------------------------------------------------------------------
-# device boards / init rendering (PO 2026-08-15)
-# --------------------------------------------------------------------------
-
-
-def test_device_boards_lists_supported_and_planned(capsys) -> None:
-    """The registry's answer, plus the stable docs link."""
-    assert main(["device", "boards"]) == 0
-    out = capsys.readouterr().out
-    assert BOARD in out
-    assert "Planned, not usable yet:" in out
-    assert "https://t.mcuhome.org/cli/docs/device-supported-boards/" in out
-
-
-def test_device_boards_as_a_document(capsys) -> None:
-    assert main(["device", "boards", "-o", "json"]) == 0
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is True
-    names = [entry["name"] for entry in document["boards"]]
-    assert BOARD in names
-    assert all("status" in entry for entry in document["planned"])
-
-
-def test_init_lists_files_first_and_marks_directories(tmp_path, capsys, monkeypatch) -> None:
-    """Files, then directories with a trailing slash (PO 2026-08-15)."""
-    monkeypatch.chdir(tmp_path)
-    assert main(["project", "init"]) == 0
-    lines = [line.strip() for line in capsys.readouterr().out.splitlines()]
-    dirs = [line for line in lines if line.endswith("/")]
-    assert "devices/" in dirs
-    assert "secrets/" in dirs
-    file_positions = [lines.index(name) for name in (".gitignore", "mcuhome.yaml")]
-    assert max(file_positions) < min(lines.index(d) for d in dirs)
-    assert "Getting started: https://t.mcuhome.org/cli/docs/getting-started/" in "\n".join(lines)
+    def test_it_refuses_with_the_condition_and_exits_one(
+        self, words: tuple[str, ...], in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        tokens = [*self._invocation(words), "-o", "json"]
+        assert main(tokens) == 1
+        document = _document(capsys)
+        assert set(document) == {"ok", "errors"}
+        assert document["errors"][0]["kind"] == "CapabilityUnavailable"
+        assert " ".join(words) in document["errors"][0]["message"]

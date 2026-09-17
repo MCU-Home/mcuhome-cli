@@ -1,133 +1,171 @@
 # SPDX-FileCopyrightText: 2026 The MCUHome Contributors
 # SPDX-License-Identifier: Apache-2.0
-"""The output contract: modes, streams, colors, interactivity."""
+"""The output contract: three modes, seven verbs, one document.
+
+What is tested here is the module itself rather than a command through
+it — the per-command documents are each command's own test, and this is
+what those documents travel in.
+"""
 
 from __future__ import annotations
 
 import json
 
-from mcuhome.model.errors import ConfigError
+import pytest
+from mcuhome.workbench import api
 
 from mcuhome.cli import output as output_module
-from mcuhome.cli.output import HUMAN, JSON, JSON_STREAM, Output, resolve
-
-# --- resolve: the three knobs -----------------------------------------
-
-
-def test_the_machine_modes_force_non_interactive() -> None:
-    """A consumer parsing NDJSON cannot answer a question."""
-    for mode in (JSON, JSON_STREAM):
-        resolved = resolve(mode=mode, interactive=True, env={})
-        assert resolved.machine
-        assert not resolved.interactive
+from mcuhome.cli.errors import UsageError
+from mcuhome.cli.output import HUMAN, JSON, JSON_STREAM, Output
 
 
-def test_the_explicit_flags_decide_interactivity_in_human_mode() -> None:
-    assert resolve(mode=HUMAN, interactive=True, env={}).interactive
-    assert not resolve(mode=HUMAN, interactive=False, env={}).interactive
+def _stream(captured: str) -> list[dict]:
+    return [json.loads(line) for line in captured.splitlines() if line]
 
 
-def test_the_interactive_default_is_tty_detection() -> None:
-    """Under pytest neither stream is a TTY, so the default is off."""
-    assert not resolve(mode=HUMAN, interactive=None, env={}).interactive
+class TestTheModes:
+    def test_human_renders_on_stdout_and_answers_no_document(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        output = Output(mode=HUMAN)
+        output.human("a line")
+        output.result({"ok": True})
+        assert capsys.readouterr().out == "a line\n"
+
+    def test_json_answers_exactly_one_document(self, capsys: pytest.CaptureFixture[str]) -> None:
+        output = Output(mode=JSON)
+        output.human("not printed")
+        output.result({"ok": True, "name": "build.mode"})
+        assert json.loads(capsys.readouterr().out) == {"ok": True, "name": "build.mode"}
+
+    def test_json_stream_carries_the_same_document_in_its_result(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        output = Output(mode=JSON_STREAM)
+        output.start("config print")
+        output.result({"ok": True})
+        messages = _stream(capsys.readouterr().out)
+        assert [message["verb"] for message in messages] == ["start", "result"]
+        assert messages[-1]["document"] == {"ok": True}
+
+    def test_a_run_answers_once(self) -> None:
+        output = Output(mode=JSON)
+        output.result({"ok": True})
+        with pytest.raises(RuntimeError):
+            output.result({"ok": True})
+
+    def test_logs_and_warnings_go_to_stderr_in_every_mode(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        for mode in output_module.MODES:
+            output = Output(mode=mode)
+            output.log("a log line")
+            output.warn("something is off")
+            captured = capsys.readouterr()
+            assert captured.out == ""
+            assert "a log line" in captured.err
 
 
-def test_color_always_and_never_beat_the_terminal() -> None:
-    assert resolve(color="always", env={}).color
-    assert not resolve(color="never", env={}).color
+class TestTheVerbs:
+    """Seven verbs, and the key set each one carries."""
+
+    def test_every_verb_is_one_line_with_its_keys(self, capsys: pytest.CaptureFixture[str]) -> None:
+        output = Output(mode=JSON_STREAM)
+        output.start("device build", steps=["context"])
+        output.progress("migration_started", name="v2_secrets_layout")
+        output.finding({"severity": "warning", "message": "a file is exposed", "hint": None})
+        output.wait(retry_after=2.0, waited=4.0, attempt=2)
+        output.stopping(seconds=None)
+        output.error({"message": "no", "kind": "ConfigError"})
+        output.result({"ok": False})
+        messages = _stream(capsys.readouterr().out)
+        assert [message["verb"] for message in messages] == [
+            "start",
+            "progress",
+            "diagnostic",
+            "wait",
+            "stopping",
+            "error",
+            "result",
+        ]
+        assert messages[0] == {"verb": "start", "task": "device build", "steps": ["context"]}
+        assert set(messages[3]) == {"verb", "retry_after", "waited", "attempt"}
+        assert messages[4] == {"verb": "stopping", "seconds": None}
+
+    def test_a_finding_reaches_a_person_on_stderr(self, capsys: pytest.CaptureFixture[str]) -> None:
+        for mode in (HUMAN, JSON):
+            Output(mode=mode).finding(
+                {"severity": "warning", "message": "MCUHOME_DOCKER is set.", "hint": "unset it"}
+            )
+            captured = capsys.readouterr()
+            assert captured.out == ""
+            assert "MCUHOME_DOCKER is set." in captured.err
+            assert "unset it" in captured.err
+
+    def test_the_stream_never_carries_translated_vocabulary(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Verbs and keys are structure, not prose: a translation of them
+        # would break every consumer, so they are plain literals.
+        output = Output(mode=JSON_STREAM)
+        output.start("version")
+        output.result({"ok": True})
+        for message in _stream(capsys.readouterr().out):
+            assert message["verb"].islower()
+            assert all(key.replace("_", "").isalnum() for key in message)
 
 
-def test_no_color_disables_auto_detection() -> None:
-    """The NO_COLOR convention: any non-empty value turns colors off."""
-    assert not resolve(color="auto", env={"NO_COLOR": "1"}).color
-    # And auto without a TTY (pytest) is off anyway.
-    assert not resolve(color="auto", env={}).color
+class TestSayingNo:
+    """A refusal and a negative answer are told apart by the keys."""
+
+    def test_a_refusal_replaces_the_document(self, capsys: pytest.CaptureFixture[str]) -> None:
+        output = Output(mode=JSON)
+        output.errors([UsageError("--nope is not a flag", hint="run mcuhome --help")])
+        document = json.loads(capsys.readouterr().out)
+        assert set(document) == {"ok", "errors"}
+        assert document["ok"] is False
+        assert document["errors"][0]["kind"] == "UsageError"
+        assert document["errors"][0]["hint"] == "run mcuhome --help"
+
+    def test_a_refusal_also_arrives_as_it_happens(self, capsys: pytest.CaptureFixture[str]) -> None:
+        output = Output(mode=JSON_STREAM)
+        output.errors([api.ConfigError("no such option")])
+        messages = _stream(capsys.readouterr().out)
+        assert [message["verb"] for message in messages] == ["error", "result"]
+        assert messages[0]["error"]["message"] == "no such option"
+
+    def test_a_refusal_is_rendered_on_stderr_for_a_person(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        output = Output(mode=HUMAN)
+        output.errors([api.ConfigError("no such option", hint="try build.mode")])
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "no such option" in captured.err
+        assert "try build.mode" in captured.err
+
+    def test_an_error_document_carries_every_key_it_declares(self) -> None:
+        document = UsageError("wrong").to_dict()
+        assert list(document) == ["message", "file", "line", "column", "key", "hint", "kind"]
 
 
-def test_style_is_the_identity_without_color() -> None:
-    plain = Output(color=False)
-    colored = Output(color=True)
-    assert plain.style("text", output_module.RED) == "text"
-    assert colored.style("text", output_module.RED) == "\x1b[31mtext\x1b[0m"
+class TestResolving:
+    """``-o``, ``--color`` and interactivity meet in one place."""
 
+    def test_a_machine_mode_is_never_interactive(self) -> None:
+        for mode in (JSON, JSON_STREAM):
+            assert output_module.resolve(mode=mode, interactive=True).interactive is False
 
-# --- the stream discipline --------------------------------------------
+    def test_no_color_turns_colors_off_under_auto(self) -> None:
+        assert output_module.resolve(color="auto", env={"NO_COLOR": "1"}).color is False
+        assert output_module.resolve(color="always", env={"NO_COLOR": "1"}).color is True
+        assert output_module.resolve(color="never", env={}).color is False
 
-
-def test_human_lines_are_suppressed_in_the_machine_modes(capsys) -> None:
-    Output(mode=JSON).human("for people only")
-    Output(mode=JSON_STREAM).human("for people only")
-    assert capsys.readouterr().out == ""
-    Output(mode=HUMAN).human("for people only")
-    assert capsys.readouterr().out == "for people only\n"
-
-
-def test_warnings_go_to_stderr_in_every_mode(capsys) -> None:
-    for mode in (HUMAN, JSON, JSON_STREAM):
-        Output(mode=mode).warn("the file is group-readable")
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err.count("Warning: the file is group-readable") == 3
-
-
-def test_stream_verbs_are_one_json_message_per_line(capsys) -> None:
-    stream = Output(mode=JSON_STREAM)
-    stream.start("build", device="node")
-    stream.progress("compile", device="node")
-    stream.result({"ok": True})
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert lines == [
-        {"verb": "start", "task": "build", "device": "node"},
-        {"verb": "progress", "stage": "compile", "device": "node"},
-        {"verb": "result", "document": {"ok": True}},
-    ]
-
-
-def test_start_and_progress_stay_silent_outside_the_stream_mode(capsys) -> None:
-    for mode in (HUMAN, JSON):
-        quiet = Output(mode=mode)
-        quiet.start("build")
-        quiet.progress("compile")
-    assert capsys.readouterr().out == ""
-
-
-def test_json_mode_emits_exactly_one_document(capsys) -> None:
-    Output(mode=JSON).result({"ok": True, "device": "node"})
-    assert json.loads(capsys.readouterr().out) == {"ok": True, "device": "node"}
-
-
-# --- errors, in every mode --------------------------------------------
-
-
-def test_errors_render_to_stderr_for_a_human(capsys, tmp_path) -> None:
-    Output(mode=HUMAN).errors([ConfigError("It broke.", hint="fix it")], cwd=tmp_path)
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "Error: It broke." in captured.err
-    assert "Fix: fix it" in captured.err
-
-
-def test_errors_are_the_failure_document_for_a_machine(capsys) -> None:
-    Output(mode=JSON).errors([ConfigError("It broke.", hint="fix it")])
-    document = json.loads(capsys.readouterr().out)
-    assert document["ok"] is False
-    assert document["errors"][0]["message"] == "It broke."
-    assert document["errors"][0]["hint"] == "fix it"
-    assert document["errors"][0]["kind"] == "ConfigError"
-
-
-def test_streamed_errors_come_verb_by_verb_and_then_as_the_document(capsys) -> None:
-    problems = [ConfigError("first"), ConfigError("second")]
-    Output(mode=JSON_STREAM).errors(problems)
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["verb"] for line in lines] == ["error", "error", "result"]
-    assert [line["error"]["message"] for line in lines[:2]] == ["first", "second"]
-    assert lines[2]["document"]["ok"] is False
-    assert len(lines[2]["document"]["errors"]) == 2
-
-
-def test_the_first_error_line_is_painted_red_when_colors_are_on(capsys, tmp_path) -> None:
-    Output(mode=HUMAN, color=True).errors([ConfigError("It broke.", hint="fix it")], cwd=tmp_path)
-    err = capsys.readouterr().err
-    assert err.startswith("\x1b[31mError: It broke.\x1b[0m")
-    assert "\x1b" not in err.split("\n", 1)[1]  # the hint stays plain
+    def test_styling_is_a_rendering_and_never_a_value(self) -> None:
+        # Colors exist in text a human reads. A document is composed of
+        # what the workbench answered, so nothing in it passes through
+        # here — `mcuhome config print --color always -o json` is where
+        # that is checked end to end.
+        output = Output(mode=JSON, color=True)
+        assert output.human("a line") is None
+        assert output.style("x", "31") != "x"

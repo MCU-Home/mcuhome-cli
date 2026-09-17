@@ -48,6 +48,7 @@ __all__ = [
     "arguments",
     "build_option_flags",
     "option_flags",
+    "problems",
     "project_option_flags",
     "signing_option_flags",
 ]
@@ -193,6 +194,33 @@ def arguments(
             )
         )
     return tuple(answered)
+
+
+def problems(
+    namespace: argparse.Namespace,
+    *,
+    env: Mapping[str, str],
+    flags: Sequence[OptionFlag] | None = None,
+) -> list[UsageError]:
+    """Every option value this invocation carried that does not parse.
+
+    The validate phase of every command: a value a **flag** carries is
+    checked before the act starts, whether or not the command would ever
+    have read it, so ``--build-memory 3x`` is exit 2 wherever it is
+    written. All of them are answered at once, because a person who
+    fixes three things in one pass is happier than one who runs the
+    command three times.
+    """
+    found: list[UsageError] = []
+    for flag in option_flags() if flags is None else flags:
+        raw = getattr(namespace, flag.dest, None)
+        if raw is None:
+            continue
+        try:
+            _parse(flag, raw, env=env)
+        except UsageError as problem:
+            found.append(problem)
+    return found
 
 
 def _parse(flag: OptionFlag, raw: object, *, env: Mapping[str, str]) -> object:

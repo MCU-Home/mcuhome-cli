@@ -39,9 +39,9 @@ from pathlib import Path
 
 from mcuhome.workbench import api
 
+from mcuhome.cli import optionflags, phases
 from mcuhome.cli import output as output_module
 from mcuhome.cli import parser as parser_module
-from mcuhome.cli import phases
 from mcuhome.cli.errors import UsageError, exit_code_for
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
@@ -95,11 +95,10 @@ def main(argv: list[str] | None = None) -> int:
             task=args.task, args=args, output=output, env=os.environ, cwd=Path.cwd()
         )
         interact = getattr(args, "interact", None)
-        validate = getattr(args, "validate", None)
         return phases.run(
             output=output,
             interact=None if interact is None else (lambda: interact(invocation)),
-            validate=None if validate is None else (lambda: validate(invocation)),
+            validate=lambda: _validate(invocation),
             execute=lambda: int(handler(invocation)),
         )
     except api.MCUHomeError as refusal:
@@ -117,6 +116,24 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.flush()
         output.log(_("Interrupted."))
         return phases.EXIT_FAILURE
+
+
+def _validate(invocation: Invocation) -> list[api.MCUHomeError]:
+    """The validate phase: the flags' own values first, then the command's.
+
+    Every command that offers an option flag has its values parsed here,
+    so a value of the wrong shape is a wrong invocation wherever it was
+    written; a command with rules of its own (``project upgrade`` and
+    its confirmation) states them as its `validate` default and is asked
+    once the values are known to be values.
+    """
+    problems: list[api.MCUHomeError] = list(
+        optionflags.problems(invocation.args, env=invocation.env)
+    )
+    own = getattr(invocation.args, "validate", None)
+    if problems or own is None:
+        return problems
+    return list(own(invocation))
 
 
 def _help_for(parser: argparse.ArgumentParser, tokens: list[str]) -> argparse.ArgumentParser | None:
