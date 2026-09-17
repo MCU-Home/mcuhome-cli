@@ -687,6 +687,43 @@ class TestAPersonReadsIt:
         assert "public key" in printed
         assert "no private key is anywhere near this build" in printed
 
+    def test_verbose_prints_the_commands_signing_will_run(
+        self,
+        device: Path,
+        built: FakeBuild,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # `-v` asks the real `plan_signing`, which resolves the key and
+        # the signing program and writes nothing.
+        assert main(["device", "build", "kitchen", "-v", "--color", "never"]) == 0
+        printed = capsys.readouterr().out
+        assert "Signing" in printed
+        assert "imgtool" in printed
+        assert "sign" in printed
+        assert "--slot-size" in printed
+
+    def test_without_verbose_no_command_is_printed(
+        self,
+        device: Path,
+        built: FakeBuild,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        assert main(["device", "build", "kitchen", "--color", "never"]) == 0
+        assert "imgtool" not in capsys.readouterr().out
+
+    def test_verbose_in_a_machine_mode_changes_no_document(
+        self,
+        device: Path,
+        built: FakeBuild,
+        signed: FakeSigning,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        assert main(["device", "build", "kitchen", "-v", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert list(document) == ["ok", "build", "signing", "footprint"]
+
     def test_an_unsigned_build_says_what_to_do_with_it(
         self, device: Path, built: FakeBuild, capsys: pytest.CaptureFixture[str]
     ) -> None:

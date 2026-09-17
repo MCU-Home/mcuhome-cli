@@ -386,8 +386,8 @@ def _sign(
         )
         output.human()
         output.human(output.heading(_("Signing")))
-        for command in plan.commands:
-            output.human(f"  {output.muted(' '.join(command.argv))}")
+        for _form, argv, _destination in plan.commands:
+            output.human(f"  {output.muted(' '.join(argv))}")
     return api.sign_firmware(
         out_dir, env=invocation.env, key=key, project=project, imgtool=imgtool, model=model
     )
