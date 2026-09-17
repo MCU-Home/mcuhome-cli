@@ -48,6 +48,7 @@ from mcuhome.cli import (
     devicecommands,
     devicedata,
     environmentcommand,
+    hostcommand,
     optionflags,
     projectcommands,
     secretcommands,
@@ -60,12 +61,6 @@ from mcuhome.cli.unavailable import refuses
 from mcuhome.cli.versioncommand import version
 
 __all__ = ["Presentation", "build_parser", "read_presentation"]
-
-#: What a command that is not implemented in this version says it waits
-#: on. The three platform acts name their own work instead.
-_NOT_YET = _(
-    "this version of MCUHome does not implement it yet; mcuhome version says which one is installed"
-)
 
 
 @dataclass(frozen=True)
@@ -550,9 +545,7 @@ def _environment(sub: _Area) -> None:
 
 def _host(sub: _Area) -> None:
     check = sub.command(
-        "check",
-        _("what a build on this machine would need"),
-        refuses("host check", waits_on=_NOT_YET),
+        "check", _("what a build on this machine would need"), hostcommand.host_check
     )
     _build_options(check, signing=_one_option("signing.imgtool"))
     _finish(check)

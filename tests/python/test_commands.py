@@ -24,13 +24,12 @@ from mcuhome.cli.main import main
 from mcuhome.cli.output import Output
 from mcuhome.cli.parser import build_parser
 
-#: What this version of the command line cannot do yet. The two device
-#: commands stay this way — flashing and the one-time board preparation
-#: wait on platform work — and the rest are commands still being written.
+#: What this version of the command line cannot do. Both wait on
+#: platform work rather than on a command being written: flashing a
+#: built image, and the one-time board preparation.
 REFUSING = {
     "device flash",
     "device install-bootloader",
-    "host check",
 }
 
 

@@ -205,8 +205,10 @@ own keys; each entry is `message`, `file`, `line`, `column`, `key`,
 `hint`, `kind`. A **negative answer** is the command's own document with
 `ok: false`: a build that ran and failed, a device whose configuration
 is invalid, a host check with a failing finding, a context whose bytes
-no longer match, an upgrade that stopped. Its findings are in the
-`diagnostics` list of the result that carries them, never in `errors`.
+no longer match, an upgrade that stopped. Its findings are in the list
+its own document names — `diagnostics` wherever a result carries one,
+`findings` for a host check and `mismatches` for a context, because each
+of those results answers what it examined — and never in `errors`.
 Seven commands can answer negatively — `device validate`,
 `device info`, `device build`, `device sign-firmware`, `host check`,
 `context verify` and `project upgrade`; every other command either does
