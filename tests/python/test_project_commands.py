@@ -195,13 +195,16 @@ class TestProjectUpgrade:
         assert main(["project", "upgrade", "-o", "json"]) == 2
         document = _document(capsys)
         assert set(document) == {"ok", "errors"}
+        # The command line's own condition, in its own vocabulary: a
+        # `kind` that is not one of its three is a workbench exception.
+        assert document["errors"][0]["kind"] == "UsageError"
         assert "--confirm" in document["errors"][0]["hint"]
 
     def test_a_confirmation_that_names_another_project_is_refused(
         self, old_project: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         assert main(["project", "upgrade", "--confirm", "abcdef", "-o", "json"]) == 2
-        assert _document(capsys)["errors"][0]["kind"] == "ConfigError"
+        assert _document(capsys)["errors"][0]["kind"] == "UsageError"
 
     def test_it_migrates_and_answers_what_it_applied(
         self, old_project: Path, capsys: pytest.CaptureFixture[str]

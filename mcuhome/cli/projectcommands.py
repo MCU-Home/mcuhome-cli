@@ -31,6 +31,7 @@ from typing import Any
 
 from mcuhome.workbench import api
 
+from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
 from mcuhome.cli.output import BOLD, GREEN, YELLOW, Cell, Output, format_table
@@ -131,7 +132,10 @@ def validate_upgrade(invocation: Invocation) -> list[api.MCUHomeError]:
         if invocation.output.interactive:
             return []
         return [
-            _refuse(
+            # The command line's own condition, in the command line's own
+            # vocabulary: the invocation was missing what it needs, and
+            # nothing ran.
+            UsageError(
                 _("An upgrade has to be confirmed, and there is no terminal to confirm at."),
                 hint=_(
                     "back the project up first, then name the project you mean:\n    {command}"
@@ -140,7 +144,7 @@ def validate_upgrade(invocation: Invocation) -> list[api.MCUHomeError]:
         ]
     if file is None or not file.matches(str(confirm)):
         return [
-            _refuse(
+            UsageError(
                 _('"{given}" does not name the project in {path}.').format(
                     given=confirm, path=project.root
                 ),
@@ -444,11 +448,6 @@ def _version(project: api.Project) -> int:
 def _confirm_command(project: api.Project) -> str:
     token = "" if project.file is None else project.file.token
     return f"mcuhome project upgrade {project.root} --confirm {token}"
-
-
-def _refuse(message: str, *, hint: str) -> api.ConfigError:
-    """A refusal about the project, in the shape every other one has."""
-    return api.ConfigError(message, hint=hint)
 
 
 def _print_plan(project: api.Project, plan: Sequence[api.Migration], *, output: Output) -> None:
