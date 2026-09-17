@@ -157,6 +157,13 @@ class TestOptionFlags:
         assert declared.flag == flag
         assert declared.env_var == variable
 
+    def test_two_variables_stand_outside_the_two_tables(self) -> None:
+        # The section says which two and why; a third one appearing here
+        # without the sentence being rewritten is what this catches.
+        listed = {variable for _flag, _option, variable in ref.option_flag_rows()}
+        declared = {option.env_var for option in api.OPTIONS if option.env_var}
+        assert declared - listed == {"MCUHOME_BUILD_BUILDER", "MCUHOME_PROJECT_DIR"}
+
     def test_three_options_have_no_flag(self) -> None:
         # `build.builder` is configuration and `--builder` selects one
         # for an invocation; the two map options are written in a file.

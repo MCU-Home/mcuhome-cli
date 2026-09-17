@@ -357,9 +357,12 @@ a configuration file. The map options `builder.<name>.*` and
 `config set` ([config](#config)) and have neither a flag nor an
 environment variable.
 
-`MCUHOME_BUILD_BUILDER` is therefore the one environment variable of an
-option this section does not list beside a flag; every other option's
-variable stands in the two tables above.
+Two environment variables of an option are therefore not listed beside a
+flag in this section: `MCUHOME_BUILD_BUILDER`, whose option has no flag
+at all, and `MCUHOME_PROJECT_DIR`, whose flag `--project-dir` is a
+global one and stands in [Global flags](#global-flags) because every
+command offers it. Every other option's variable is in one of the two
+tables above.
 
 ## project
 A project is a directory with a `.mcuhome-project-root` marker, the
