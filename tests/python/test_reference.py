@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,33 @@ def _expected_flags(command: ref.DocumentedCommand) -> set[str]:
 
 DOCUMENTED = ref.documented_commands()
 PARSED = _commands(build_parser())
+
+
+def _retired_key(entry: object) -> str:
+    """The spelling the reference's *Retired* column writes for *entry*."""
+    words = getattr(entry, "words", None)
+    if words is None:
+        return entry.spelling  # type: ignore[attr-defined]
+    flag = getattr(entry, "flag", "")
+    return "mcuhome " + " ".join([*words, *([flag] if flag else [])])
+
+
+def _retired_id(entry: object) -> str:
+    return _retired_key(entry)
+
+
+def _documented_row(entry: object) -> tuple[str, str]:
+    """The reference's row for *entry*: its successors and its qualifier.
+
+    The reference writes a top-level command with the tool's name and
+    without it — ``mcuhome validate`` beside ``build`` — and both mean
+    the same command, so both spellings are looked for.
+    """
+    documented, _prose = ref.retired_spellings()
+    key = _retired_key(entry)
+    if key in documented:
+        return documented[key]
+    return documented[key.removeprefix("mcuhome ")]
 
 
 class TestTheTree:
@@ -161,10 +189,40 @@ class TestRetiredSpellings:
             spelling.removeprefix("mcuhome ") for spelling in implemented
         }
 
+    @pytest.mark.parametrize(
+        "entry",
+        [*retiredspellings.RETIRED_COMMANDS, *retiredspellings.RETIRED_FLAGS],
+        ids=_retired_id,
+    )
+    def test_the_successor_is_the_one_the_reference_names(self, entry: object) -> None:
+        cell, _qualifier = _documented_row(entry)
+        named = ref.quoted(cell)
+        successor = entry.successor  # type: ignore[attr-defined]
+        if named:
+            # A row that names its successor in words alone ("the same
+            # act under its area") has nothing to compare against; every
+            # other one has to begin with what the reference spells.
+            assert any(successor.startswith(spelling) for spelling in named), (
+                f"{successor!r} is not one of {named}"
+            )
+
+    @pytest.mark.parametrize(
+        "entry",
+        [*retiredspellings.RETIRED_COMMANDS, *retiredspellings.RETIRED_FLAGS],
+        ids=_retired_id,
+    )
+    def test_a_successor_names_something_the_tree_has(self, entry: object) -> None:
+        # A successor nobody can type teaches nothing.
+        successor = entry.successor  # type: ignore[attr-defined]
+        for words in re.findall(r"mcuhome ([a-z][a-z-]*(?: [a-z][a-z-]*)?)", successor):
+            assert tuple(words.split()) in PARSED, words
+        flags = {spelling for parser in PARSED.values() for spelling in _flags(parser)}
+        for flag in re.findall(r"(?<![\w-])(--?[a-z][a-z-]*)", successor):
+            assert flag in flags, flag
+
     def test_a_qualified_spelling_is_retired_on_that_command_alone(self) -> None:
-        documented, _prose = ref.retired_spellings()
         for entry in retiredspellings.RETIRED_FLAGS:
-            _successor, qualifier = documented[entry.spelling]
+            _successor, qualifier = _documented_row(entry)
             assert " ".join(entry.command) == qualifier
 
     @pytest.mark.parametrize(
