@@ -947,7 +947,12 @@ the same way — under one `scope` key, which is the scope document
 
 An exposed secrets file is refused rather than read, with the `chmod`
 that fixes it: a call whose whole subject is those values does not hand
-them out of a file that is already handing them to everybody else.
+them out of a file that is already handing them to everybody else. Three
+of these commands read more than the one file they were asked about, and
+are therefore refused over a file they were not: `list-scopes` walks
+every scope the project has, and `list` and `reveal` on the **shared**
+file read each device's file to say which devices refer to a key. The
+refusal names the exposed file and the `chmod` either way.
 
 ### `mcuhome secret list-scopes`
 Every scope this project could have and whether its file exists — which

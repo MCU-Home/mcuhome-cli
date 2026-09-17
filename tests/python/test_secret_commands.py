@@ -46,6 +46,25 @@ def secrets(in_project: Path) -> Path:
 
 
 @pytest.fixture
+def builder_secrets(secrets: Path) -> Path:
+    """A project that also keeps a build server credential."""
+    api.set_secret(
+        api.read_project(secrets), kind="builder", name="attic", key="token", value="t0ken"
+    )
+    return secrets
+
+
+@pytest.fixture
+def exposed_device(secrets: Path) -> Path:
+    """A project with a second device whose secrets file everybody can read."""
+    project = api.read_project(secrets)
+    api.create_device("bath", project=project, board=BOARD)
+    api.set_secret(project, kind="device", name="bath", key="token", value="bath-token")
+    (secrets / "secrets" / "device" / "kitchen.yaml").chmod(0o644)
+    return secrets
+
+
+@pytest.fixture
 def keyed(in_project: Path) -> Path:
     """A project whose signing key is drawn."""
     api.create_signing_key(env=dict(os.environ), project=api.read_project(in_project))
@@ -183,6 +202,74 @@ class TestSecretReveal:
         assert document["scope"]["kind"] == "device"
         assert document["scope"]["name"] == "kitchen"
         assert document["value"] == "device-token"
+
+    def test_the_scope_is_the_workbenchs_own_answer(
+        self, builder_secrets: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The scope document is read, never composed out of the flags.
+
+        A builder scope, because it is the one the command line could
+        most easily get wrong: the file is named after the builder, in
+        the directory of its kind, and whether it is there is a fact
+        about the disk rather than about the invocation.
+        """
+        code = main(
+            [
+                "secret",
+                "reveal",
+                "--kind",
+                "builder",
+                "--name",
+                "attic",
+                "--key",
+                "token",
+                "-o",
+                "json",
+            ]
+        )
+        assert code == 0
+        scope = _document(capsys)["scope"]
+        known = {
+            entry.kind: entry for entry in api.find_secret_scopes(api.read_project(builder_secrets))
+        }
+        assert scope == known["builder"].to_dict()
+        assert Path(scope["file"]) == builder_secrets / "secrets" / "builder" / "attic.yaml"
+        assert scope["exists"] is True
+
+    def test_an_exposed_device_file_refuses_the_shared_scope(
+        self, exposed_device: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """What the shared file's commands read, they are refused over.
+
+        `list` and `reveal` on the shared file say which devices refer to
+        each key, so they read every device's file — and an exposed one
+        is refused there like anywhere else, naming the file and the
+        `chmod`. A scope of its own is unaffected.
+        """
+        exposed = str(exposed_device / "secrets" / "device" / "kitchen.yaml")
+        assert main(["secret", "reveal", "--key", "wifi_password", "-o", "json"]) == 1
+        entry = _document(capsys)["errors"][0]
+        assert exposed in entry["message"]
+        assert "chmod" in entry["hint"]
+        assert main(["secret", "list", "-o", "json"]) == 1
+        assert exposed in _document(capsys)["errors"][0]["message"]
+        # The device that is not exposed is answered as before.
+        code = main(
+            [
+                "secret",
+                "reveal",
+                "--kind",
+                "device",
+                "--name",
+                "bath",
+                "--key",
+                "token",
+                "-o",
+                "json",
+            ]
+        )
+        assert code == 0
+        assert _document(capsys)["value"] == "bath-token"
 
     def test_the_signing_key_is_refused_rather_than_printed(
         self, keyed: Path, capsys: pytest.CaptureFixture[str]
