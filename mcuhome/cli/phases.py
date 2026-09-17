@@ -16,9 +16,8 @@ Every command runs in three phases, in this order:
    validate failed: the boundary is not "before anything is written"
    but sharper — the action does not start at all.
 
-The three phases are the *contract*, not a prescribed class layout
-(the product owner's wording): a command hands :func:`run` plain
-callables and keeps its own shape. The exit codes are the contract's
+The three phases are the *contract*, not a prescribed class layout: a
+command hands :func:`run` plain callables and keeps its own shape. The exit codes are the contract's
 other half, and there are exactly three — nothing else, deliberately.
 """
 
