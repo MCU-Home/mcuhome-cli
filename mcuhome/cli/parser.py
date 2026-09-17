@@ -41,7 +41,7 @@ from typing import Any
 
 from mcuhome.workbench import api
 
-from mcuhome.cli import buildcommand, configcommands, optionflags, projectcommands
+from mcuhome.cli import buildcommand, configcommands, devicecommands, optionflags, projectcommands
 from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
@@ -277,7 +277,7 @@ def _device(sub: _Area) -> None:
     )
     _finish(listing)
 
-    info = sub.command("info", _("one device in full"), refuses("device info", waits_on=_NOT_YET))
+    info = sub.command("info", _("one device in full"), devicecommands.device_info)
     _positional(info, "device", help=_("device name or path"))
     _finish(info)
 
@@ -334,7 +334,7 @@ def _device(sub: _Area) -> None:
     generate = sub.command(
         "generate-application",
         _("write the standalone Zephyr application"),
-        refuses("device generate-application", waits_on=_NOT_YET),
+        devicecommands.device_generate_application,
     )
     _positional(generate, "device", help=_("device name or path"))
     _value(generate, "--out-dir", metavar="PATH", required=True, help=_("where the tree goes"))
@@ -343,12 +343,13 @@ def _device(sub: _Area) -> None:
     sign = sub.command(
         "sign-firmware",
         _("sign the image of a finished build"),
-        refuses("device sign-firmware", waits_on=_NOT_YET),
+        devicecommands.device_sign_firmware,
     )
     _positional(sign, "device", help=_("device name or path"))
     _value(sign, "--out-dir", metavar="PATH", help=_("the build directory to sign in"))
     _switch(sign, "--dry-run", help=_("print every command signing would run"))
     optionflags.add_option_flags(sign, optionflags.signing_option_flags(), group=_("option flags"))
+    sign.set_defaults(validate=devicecommands.validate_sign_firmware)
     _finish(sign)
 
     clean = sub.command(

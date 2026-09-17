@@ -30,10 +30,7 @@ from mcuhome.cli.parser import build_parser
 REFUSING = {
     "device new",
     "device list",
-    "device info",
     "device validate",
-    "device generate-application",
-    "device sign-firmware",
     "device clean",
     "device rename",
     "device delete",
