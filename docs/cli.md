@@ -1338,10 +1338,11 @@ because by then the invocation was not what was wrong.
 Every exit code corresponds to the document's `ok`: `0` is `ok: true`,
 `1` and `2` are `ok: false` — as a refusal document with the conditions
 in `errors`, or, for the seven commands that can answer negatively, as
-the command's own document — with its findings in `diagnostics`, or,
-where nothing was found and the run only did not finish
-(`project upgrade`), with the keys that say what it did and what
-remains. The two
+the command's own document — with its findings in the list that
+document names (`diagnostics`, and `findings` or `mismatches` where the
+result answers what it examined), or, where nothing was found and the
+run only did not finish (`project upgrade`), with the keys that say what
+it did and what remains. The two
 data documents (`device print-schema`, `device list-supported`) carry no verdict of
 their own: there the exit code is the whole statement.
 
