@@ -14,6 +14,7 @@ without writing it down.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,4 +253,63 @@ def prose_calls() -> dict[tuple[str, ...], list[str]]:
             if not spelling.startswith("mcuhome"):
                 continue
             found[_spelling(spelling).words] = quoted(prose)
+    return found
+
+
+def _console_lines(body: list[str]) -> list[str]:
+    """Every shell command of *body*'s ```console blocks, one per line.
+
+    A prompt (``$`` or ``>``) opens a command and a trailing backslash
+    continues it, which is how the examples are written; everything else
+    inside a block is either a continuation or printed output.
+    """
+    commands: list[str] = []
+    current = ""
+    inside = False
+    for line in body:
+        if line.startswith("```"):
+            inside = line.startswith("```console")
+            continue
+        if not inside:
+            continue
+        if line.startswith(("$ ", "> ")):
+            if current:
+                commands.append(current)
+            current, text = "", line[2:]
+        elif current:
+            text = line
+        else:
+            continue  # output the example prints, not a command
+        text = text.rstrip()
+        continued = text.endswith("\\")
+        current = f"{current} {text.removesuffix(chr(92)).strip()}".strip()
+        if not continued:
+            commands.append(current)
+            current = ""
+    if current:
+        commands.append(current)
+    return commands
+
+
+def pipeline_invocations() -> list[list[str]]:
+    """Every ``mcuhome …`` invocation of *In a pipeline*, without the program.
+
+    Shell around it is dropped: a pipeline stage that is not this
+    command is not one, and a redirection is the shell's and not an
+    argument. What is left is exactly the argument list the examples
+    tell a script to pass.
+    """
+    body = next(body for heading, body in sections("##") if heading == "In a pipeline")
+    found: list[list[str]] = []
+    for command in _console_lines(body):
+        for stage in command.split("|"):
+            words = stage.split()
+            if not words or words[0] != "mcuhome":
+                continue
+            tokens = shlex.split(stage)
+            for index, token in enumerate(tokens):
+                if token in (">", ">>", "<"):
+                    tokens = tokens[:index]
+                    break
+            found.append(tokens[1:])
     return found
