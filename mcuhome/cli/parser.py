@@ -49,6 +49,7 @@ from mcuhome.cli import (
     optionflags,
     projectcommands,
     secretcommands,
+    signingcommands,
 )
 from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
@@ -499,7 +500,7 @@ def _signing(sub: _Area) -> None:
     public = sub.command(
         "print-public-key",
         _("the public half of the signing key"),
-        refuses("signing print-public-key", waits_on=_NOT_YET),
+        signingcommands.signing_print_public_key,
     )
     optionflags.add_option_flags(public, _one_option("signing.key"), group=_("option flags"))
     _finish(public)
@@ -507,7 +508,7 @@ def _signing(sub: _Area) -> None:
     create = sub.command(
         "create-key",
         _("draw the project's signing key"),
-        refuses("signing create-key", waits_on=_NOT_YET),
+        signingcommands.signing_create_key,
     )
     optionflags.add_option_flags(create, _one_option("signing.key"), group=_("option flags"))
     _finish(create)
