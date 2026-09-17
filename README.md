@@ -7,77 +7,94 @@ signing step it invokes lives in the library.
 
 ## What this repository holds
 
-- The `mcuhome` console script and its parser: projects, devices, builds,
-  signing, configuration and diagnostics.
-- Three output modes behind one `-o/--output` flag — human, JSON and NDJSON —
-  so one command serves a person and a program.
+- The `mcuhome` console script and its parser: 38 commands — the eight areas
+  `project`, `config`, `device`, `secret`, `signing`, `context`,
+  `environment` and `host`, and `version` on its own at the top.
+- Three output modes behind one `-o/--output` flag — `human`, `json` and
+  `json-stream` — on every command, so one command serves a person and a
+  program.
 - A live build view: a step line naming where each step runs, a repainted
   window on the build log, and the full log in a file.
-- The phase contract that turns a library refusal into an exit code, a hint
-  and a documentation link.
+- The three phases every run walks (interact, validate, execute), the three
+  exit codes and the four refusal kinds the command line owns.
 - Message externalization (gettext) for every string a person reads, with
   machine output deliberately outside it.
 
 ## Using it
 
 The distribution installs one console script, `mcuhome`, which works on a
-project directory — create one, scaffold a device in it, and build that
-device:
+project directory — create one, draw the project's signing key, scaffold a
+device and build it:
 
 ```sh
-mcuhome project init my-project
-cd my-project
-mcuhome device new my-device --board nrf7002dk/nrf5340/cpuapp
-mcuhome device build my-device
+mcuhome project init thermostats
+cd thermostats
+mcuhome signing create-key
+mcuhome device new kitchen --board nrf7002dk/nrf5340/cpuapp
+mcuhome device build kitchen
 ```
+
+The key is drawn once per project and before the first build, because a
+build signs what it produced and MCUHome never draws key material on the
+way past.
 
 Every command answers `--help`, and `-o json` / `-o json-stream` hand a
 driving process the same information as a document instead of a rendering.
 
-### Where a build runs, and how
+## The reference
 
-`mcuhome device build` places a build on two axes. The **target** is where it
-runs, the **mode** is how this machine executes a local one; each flag sets the
-configuration option of the same name for that one invocation:
+**[`docs/cli.md`](docs/cli.md) is the contract**: every command, every flag,
+every document a command prints and every exit code it answers with. A
+program that drives `mcuhome` reads that document; this README is the door
+to it. The workbench's own surface — the functions each command calls — is
+[`mcuhome-workbench/docs/api.md`](https://github.com/mcu-home/mcuhome-workbench/blob/main/docs/api.md).
+
+## Where a build runs, and how
+
+`mcuhome device build` places a build on two axes. The **target** is where
+it runs — `local` on this machine, `remote` on a build server — and the
+**mode** is how this machine executes a local one, in a build container or
+as a child process against an unpacked build environment:
 
 ```sh
-mcuhome device build my-device --build-target local  --build-mode container
-mcuhome device build my-device --build-target local  --build-mode subprocess
-mcuhome device build my-device --build-target remote --build-server buildbox:8080
+mcuhome device build kitchen --build-target local  --build-mode container
+mcuhome device build kitchen --build-target local  --build-mode subprocess
+mcuhome device build kitchen --build-target remote --build-server buildbox:8080
 ```
 
-| flag | what it states |
-|---|---|
-| `--build-target local\|remote` | build on this machine, or on a build server (`build.target`) |
-| `--build-mode container\|subprocess` | how a local build is executed (`build.mode`); a remote build has no mode of its own to state |
-| `--build-server ADDRESS`, `--build-token TOKEN` | the remote target's server and its bearer token; a configured builder carries its own |
-| `--container-image PIN` | pin the image for this one build: a repository, `:tag`, `@sha256:…`, or a repository with either. Overrides the device's `sources.container_image` |
-| `--sdk-sources DIR` | a directory holding the hash-pinned SDK package (repeatable, searched in order). Optional at both targets — without one the package registry answers |
-| `--builder NAME` | build through a configured builder instead of stating target and flags |
+Each of those flags carries the configuration option of the same name
+(`build.target`, `build.mode`) for that one invocation; `--builder` picks a
+builder configured under `builder.<name>` instead of stating the axes, and
+`--container-image` pins the image for one build in place of the device's
+own `sources.container_image`. The whole table is in
+[the reference](docs/cli.md).
 
-Nothing tells a build how many jobs to run: a build is given a CPU and a memory
-budget (`build.cpus`, `build.memory`), the build environment sizes its own
-parallelism from it, and a container build is held to it from outside.
+Nothing tells a build how many jobs to run: a build is given a CPU and a
+memory budget (`build.cpus`, `build.memory`), the build environment sizes
+its own parallelism from it, and a container build is held to it from
+outside.
 
-`mcuhome config print` lists every option with the layer it came from, which is
-where the two keys are read back:
+`mcuhome config print` lists every option with the layer it came from,
+which is where those keys are read back:
 
 ```console
 $ mcuhome config print
-option                        value                               origin
+option                        value                               origin   source
 …
 build.target                  local                               default
 build.mode                    container                           default
 build.container_repositories  ghcr.io/mcu-home/build-environment  default
 …
-$ mcuhome config set build.mode subprocess --user
+$ mcuhome config set build.mode subprocess --scope user
 ```
 
-`mcuhome doctor` answers the same question for the machine rather than for one
-build: its `builders` line names the configured builders, or says what a plain
-`mcuhome device build` would do — "none configured — a plain build runs on this
-machine, in a build container" — and the container check is skipped where the
-mode is `subprocess`.
+`mcuhome host check` answers the same question for the machine rather than
+for one build: one finding per thing it examined, with the fix where there
+is one. What it probes follows the configured mode — the container runtime
+and the image search for `container`, the environment store and the
+interpreter for `subprocess` — while the signing program, the compiler
+cache, the project, the resolved configuration, the configured builders and
+the permissions of the project's secrets are examined either way.
 
 ### Building against your own west workspace
 
@@ -85,9 +102,9 @@ Working on the SDK itself is a build like any other, with the environment
 pointed at a west workspace you maintain:
 
 ```sh
-mcuhome config set build.mode subprocess --user
-mcuhome config set build.dev_workspace ~/work/mcuhome-workspace --user
-mcuhome device build my-device
+mcuhome config set build.mode subprocess --scope user
+mcuhome config set build.dev_workspace ~/work/mcuhome-workspace --scope user
+mcuhome device build kitchen
 ```
 
 The workspace — the directory holding `.west/`, the `mcuhome-sdk` checkout,
@@ -104,35 +121,40 @@ path for a development build.
 ## How it fits into MCUHome
 
 This package declares one dependency,
-[mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench), which
-resolves the device model and runs the build and the signature. Where a
-build runs is its **target** (`--build-target`, or the `build.target`
-option): a `local` build compiles in a build environment on this machine,
-built from [mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) together
-with the C runtime it compiles against; a `remote` build hands the context
-to a server from
-[mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver). How
-this machine executes a local build is its **mode** (`--build-mode`, or
-`build.mode`): in a build container, or as a child process against the
-build environment MCUHome unpacked here. `--container-image` pins the image
-for one build, in place of the device's own `sources.container_image`.
+[mcuhome-workbench](https://github.com/mcu-home/mcuhome-workbench), and
+imports exactly one module of it: `mcuhome.workbench.api`, the workbench's
+supported surface. The workbench resolves the device model and runs the
+build and the signature. A `local` build compiles in a build environment on
+this machine, built from
+[mcuhome-sdk](https://github.com/mcu-home/mcuhome-sdk) together with the C
+runtime it compiles against; a `remote` build hands the context to a server
+from
+[mcuhome-buildserver](https://github.com/mcu-home/mcuhome-buildserver).
 [mcuhome-ui](https://github.com/mcu-home/mcuhome-ui) offers the same
-operations in a browser, over the same workbench API.
+operations in a browser, over the same workbench API — which is why the
+command line is written as the worked example of that API rather than as a
+program with knowledge of its own.
 
 ## Development — how to work on this repository
 
 This repository has its own virtual environment in `.venv/`; nothing is
 installed into the system Python or into another repository's environment.
-`bin/` holds the user-facing entry points, `scripts/` the development
-tooling: `scripts/test` and `scripts/lint` dispatch the checks — `all` runs
-every one, `list` names them, `<name>` runs one — and each check is its own
-wrapper in `scripts/test.d/` or `scripts/lint.d/`. The wrappers select
-`.venv` themselves (never activate one by hand) and are exactly what CI
-runs, one job per check.
+It ships one user-facing entry point and it is a console script, so
+`scripts/` holds the development tooling and nothing else: `scripts/test`
+and `scripts/lint` dispatch the checks — `all` runs every one, `list` names
+them, `<name>` runs one — and each check is its own wrapper in
+`scripts/test.d/` or `scripts/lint.d/`. The wrappers select `.venv`
+themselves (never activate one by hand) and are exactly what CI runs, one
+job per check.
 
-Needs Python ≥3.13 and sibling checkouts of `mcuhome-sdk` (`packaging/model`,
-`packaging/compiler`) and `mcuhome-workbench` — this package's one
-dependency — with its `remote` and `generate` extras.
+Needs Python ≥3.13 and sibling checkouts of `mcuhome-workbench` — this
+package's one dependency, installed with its `remote` and `generate`
+extras — of `mcuhome-sdk`, which holds the device model (`packaging/model`)
+and the code generator (`packaging/compiler`), and of `mcuhome-packagetool`,
+which the workbench imports to verify what a package registry serves. None
+of them is published yet, so all four are installed from the checkouts
+beside this one, in one invocation, so pip resolves their pins against each
+other rather than against an index:
 
 ```sh
 python3 -m venv .venv && .venv/bin/pip install \
@@ -154,14 +176,24 @@ commits, licensing — are in the organization's
 
 The private signing key stays on the machine the command runs on: a build
 yields an unsigned image wherever it ran, and a separate step on this
-host applies the signature, so a build server is never handed a key.
-Commissioning passcodes are masked in output that merely passes by, and
-only `mcuhome device matter-pairing` or an explicit `--show-sensitive`
-prints them. Report a vulnerability through the organization's security
-policy, [SECURITY.md](https://github.com/mcu-home/.github/blob/main/SECURITY.md).
+host applies the signature, so a build server is never handed a key. A
+build server's token has two channels and no third — `--build-server-token
+-`, which reads it from standard input rather than leaving it in the
+process list, and `secrets/builder/<name>.yaml` — and no document this
+command line prints carries one.
+
+Commissioning passcodes are masked in the human rendering that merely
+passes them by; `mcuhome device print-matter-pairing` is the command that
+prints them, `mcuhome device validate --show-sensitive` is what unmasks
+them in a rendering, and `mcuhome secret reveal --key <key>` answers one
+secret value to a caller that asked for exactly that one. Report a
+vulnerability through the organization's security policy,
+[SECURITY.md](https://github.com/mcu-home/.github/blob/main/SECURITY.md).
 
 ## Documentation
 
+- [`docs/cli.md`](docs/cli.md) — the reference: every command, flag,
+  document and exit code
 - [Getting started](https://t.mcuhome.org/cli/docs/getting-started/0.1/) — a
   first project, device and build
 - [Supported boards](https://t.mcuhome.org/cli/docs/device-supported-boards/0.1/)
