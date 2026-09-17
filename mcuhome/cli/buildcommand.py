@@ -156,7 +156,15 @@ def _build_holding_the_directory(
         output=output,
         log_path=out_dir / buildview.LOG_FILE,
     )
-    _print_header(model, selection=selection, options=options, key=key, output=output)
+    _print_header(
+        model,
+        selection=selection,
+        options=options,
+        key=key,
+        public_key=_public_key_path(invocation),
+        signing=invocation.flag("sign") is not False,
+        output=output,
+    )
 
     def on_step(stage: str, **facts: Any) -> None:
         # One seam, three consumers: the machine modes get the stage with
@@ -329,6 +337,12 @@ def _selected_builder(
     )
 
 
+def _public_key_path(invocation: Invocation) -> Path | None:
+    """The file ``--public-key`` names, or ``None`` where it was not used."""
+    stated = invocation.flag("public_key")
+    return None if stated is None else _path(invocation, str(stated))
+
+
 def _signing_material(
     invocation: Invocation, settings: api.Settings, project: api.Project | None
 ) -> tuple[str, api.SigningKey | None]:
@@ -340,9 +354,9 @@ def _signing_material(
     own text, and that is the one combination in which no private key is
     read at all.
     """
-    public_key = invocation.flag("public_key")
+    public_key = _public_key_path(invocation)
     if public_key is not None:
-        return _path(invocation, str(public_key)).read_text(encoding="utf-8"), None
+        return public_key.read_text(encoding="utf-8"), None
     key = api.resolve_signing_key(
         settings.value("signing.key"), env=invocation.env, project=project
     )
@@ -557,9 +571,17 @@ def _print_header(
     selection: api.SelectedBuilder,
     options: api.BuildOptions,
     key: api.SigningKey | None,
+    public_key: Path | None,
+    signing: bool,
     output: Output,
 ) -> None:
-    """What is being built, where, and with which key."""
+    """What is being built, where, and which key it is built against.
+
+    The key line says which half was read, because that is the whole
+    difference between the two ways to run this: a build that signs here
+    reads the private key, and ``--no-sign --public-key`` is the one
+    combination in which no private key is touched at all.
+    """
     if output.machine:
         return
     output.human()
@@ -573,9 +595,12 @@ def _print_header(
             f"{output.muted(f'({selection.builder.target})')}"
         )
     if key is None:
-        output.human(output.muted(_("  --no-sign: no private key is anywhere near this build.")))
+        output.human(f"  {output.muted(_('public key '))} {output.path(public_key)}")
+        output.human(output.muted(_("  no private key is anywhere near this build (--no-sign).")))
     else:
         output.human(f"  {output.muted(_('signing key'))} {output.path(key.path)}")
+        if not signing:
+            output.human(output.muted(_("  --no-sign: only its public half reaches the build.")))
     output.human()
 
 

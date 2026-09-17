@@ -658,6 +658,35 @@ class TestAPersonReadsIt:
         # A region that is not memory on the device is not in the table.
         assert "IDT_LIST" not in printed
 
+    def test_the_header_says_which_half_of_the_key_was_read(
+        self, device: Path, built: FakeBuild, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # The whole difference between the two ways to run this.
+        assert main(["device", "build", "kitchen", "--no-sign", "--color", "never"]) == 0
+        printed = capsys.readouterr().out
+        assert "signing key" in printed
+        assert "only its public half reaches the build" in printed
+
+        public = device / "public.pem"
+        resolved = api.resolve_signing_key(env=dict(os.environ), project=api.read_project(device))
+        public.write_text(api.public_key_pem(resolved.pem), encoding="utf-8")
+        code = main(
+            [
+                "device",
+                "build",
+                "kitchen",
+                "--no-sign",
+                "--public-key",
+                str(public),
+                "--color",
+                "never",
+            ]
+        )
+        assert code == 0
+        printed = capsys.readouterr().out
+        assert "public key" in printed
+        assert "no private key is anywhere near this build" in printed
+
     def test_an_unsigned_build_says_what_to_do_with_it(
         self, device: Path, built: FakeBuild, capsys: pytest.CaptureFixture[str]
     ) -> None:
