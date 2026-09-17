@@ -5,10 +5,12 @@
 # scripts/test.d/ (today just pytest), plus a pre-check that every
 # wrapper has a job here.
 #
-# test-pytest needs the workbench (mcu-home/mcuhome-workbench) and the
-# model+compiler from mcu-home/mcuhome-sdk — both
-# public siblings, plain checkouts, no deploy keys. Once the packages are
-# published this becomes a plain pip install.
+# test-pytest needs the workbench (mcu-home/mcuhome-workbench), the
+# device model and the code generator from mcu-home/mcuhome-sdk, and the
+# package-registry verifier the workbench imports
+# (mcu-home/mcuhome-packagetool) — all public siblings, plain checkouts,
+# no deploy keys. Once the packages are published this becomes a plain
+# pip install.
 #
 # All actions are pinned to commit SHAs, not tags.
 
@@ -41,7 +43,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Checkout the mcuhome builder library
+      - name: Checkout the device model and the code generator
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mcu-home/mcuhome-sdk
@@ -66,12 +68,15 @@ jobs:
           python-version: "3.13"
 
       - name: Create .venv and install
-        # One namespace, two repositories:
-        # model+compiler from mcuhome-sdk/packaging, the workbench from
-        # the mcuhome repo root. One invocation, so pip resolves the
+        # One namespace, three repositories: model and compiler from
+        # mcuhome-sdk/packaging, the workbench from the root of
+        # mcuhome-workbench, the registry verifier from the root of
+        # mcuhome-packagetool. One invocation, so pip resolves the
         # sibling pins against the copies being installed rather than
         # against an index. The [generate] extra's compiler pin is
-        # satisfied by the sdk copy on the same command line. Installed
+        # satisfied by the sdk copy on the same command line, and the
+        # [remote] extra brings the session client the `remote` build
+        # target needs. Installed
         # into this job's own .venv — scripts/test selects it itself.
         # The dev tools are a PEP 735 dependency group (--group dev),
         # which needs pip >= 25.1; upgrade first.
