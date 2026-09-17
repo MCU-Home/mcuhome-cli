@@ -10,6 +10,7 @@ command here needs either.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,42 @@ from mcuhome.cli.invocation import Invocation
 from mcuhome.cli.main import main
 from mcuhome.cli.output import Output
 from mcuhome.cli.parser import build_parser
+
+#: What this version of the command line cannot do yet. Two of them stay
+#: this way — flashing and the one-time board preparation wait on
+#: platform work — and the rest are commands still being written.
+REFUSING = {
+    "device new",
+    "device list",
+    "device info",
+    "device validate",
+    "device build",
+    "device generate-application",
+    "device sign-firmware",
+    "device clean",
+    "device rename",
+    "device delete",
+    "device print-matter-pairing",
+    "device create-matter-pairing",
+    "device print-schema",
+    "device list-boards",
+    "device list-supported",
+    "device flash",
+    "device install-bootloader",
+    "secret list-scopes",
+    "secret list",
+    "secret reveal",
+    "secret set",
+    "secret unset",
+    "secret delete",
+    "signing print-public-key",
+    "signing create-key",
+    "context create",
+    "context verify",
+    "context print",
+    "environment provision",
+    "host check",
+}
 
 
 def _document(capsys: pytest.CaptureFixture[str]) -> dict:
@@ -258,51 +295,55 @@ class TestTheArgumentsChannel:
 
 
 class TestWhatIsNotImplementedYet:
-    """Every command of the reference answers; some of them say no."""
+    """Every command of the reference answers; some of them say no.
+
+    The list is taken from the parser rather than written down, so a
+    command that grows a real handler leaves it by itself.
+    """
 
     @staticmethod
-    def _invocation(words: tuple[str, ...]) -> list[str]:
-        """A well-formed invocation of *words*: its positionals and required flags."""
-        import argparse
+    def _tree() -> dict[tuple[str, ...], argparse.ArgumentParser]:
+        found: dict[tuple[str, ...], argparse.ArgumentParser] = {}
 
-        parser = build_parser()
-        for word in words:
-            sub = next(a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
-            parser = sub.choices[word]
+        def walk(parser: argparse.ArgumentParser, words: tuple[str, ...]) -> None:
+            sub = next(
+                (a for a in parser._actions if isinstance(a, argparse._SubParsersAction)), None
+            )
+            if sub is None:
+                found[words] = parser
+                return
+            for name, child in sub.choices.items():
+                walk(child, (*words, name))
+
+        walk(build_parser(), ())
+        return found
+
+    @staticmethod
+    def _invocation(words: tuple[str, ...], parser: argparse.ArgumentParser) -> list[str]:
+        """A well-formed invocation: the positionals and the required flags."""
         tokens = list(words)
         for action in parser._actions:
             if not action.option_strings and action.nargs != "?":
                 tokens.append("x")
             elif action.required and action.option_strings:
-                tokens.extend([action.option_strings[0], "x"])
+                value = action.choices[0] if action.choices else "x"
+                tokens.extend([action.option_strings[0], value])
         return tokens
 
-    @pytest.mark.parametrize(
-        "words",
-        [
-            ("device", "new"),
-            ("device", "list"),
-            ("device", "build"),
-            ("device", "sign-firmware"),
-            ("device", "clean"),
-            ("device", "print-schema"),
-            ("device", "flash"),
-            ("device", "install-bootloader"),
-            ("secret", "list"),
-            ("secret", "reveal"),
-            ("signing", "create-key"),
-            ("context", "verify"),
-            ("environment", "provision"),
-            ("host", "check"),
-        ],
-        ids=lambda words: " ".join(words),
-    )
     def test_it_refuses_with_the_condition_and_exits_one(
-        self, words: tuple[str, ...], in_project: Path, capsys: pytest.CaptureFixture[str]
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        tokens = [*self._invocation(words), "-o", "json"]
-        assert main(tokens) == 1
-        document = _document(capsys)
-        assert set(document) == {"ok", "errors"}
-        assert document["errors"][0]["kind"] == "CapabilityUnavailable"
-        assert " ".join(words) in document["errors"][0]["message"]
+        refusing = {
+            words: parser
+            for words, parser in self._tree().items()
+            if parser.get_default("handler").__module__ == "mcuhome.cli.unavailable"
+        }
+        # The implemented commands of this version are the ones missing.
+        assert {" ".join(words) for words in refusing} == REFUSING
+        for words, parser in refusing.items():
+            tokens = [*self._invocation(words, parser), "-o", "json"]
+            assert main(tokens) == 1, tokens
+            document = _document(capsys)
+            assert set(document) == {"ok", "errors"}, tokens
+            assert document["errors"][0]["kind"] == "CapabilityUnavailable", tokens
+            assert " ".join(words) in document["errors"][0]["message"]
