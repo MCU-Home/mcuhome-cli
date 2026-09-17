@@ -696,6 +696,12 @@ stop reports as its bound. Under `-v` in `human`, `plan_signing` is
 called first and its commands are printed: the plan writes nothing and
 raises whatever the run would, so showing them costs a person nothing.
 
+The build directory is held with `open_build_lock` for the **whole**
+command and not for the compile alone, because delivering the artifacts
+and signing the image both write files a second run would be overwriting
+underneath. A second build of the same device therefore refuses in words
+naming the holder, rather than racing this one.
+
 **Stopping.** `Ctrl-C` sets the stop predicate rather than killing the
 process: the build walks its ladder down, releases the build directory
 and answers `ok: false, stopped: true`. The bound is stated when the
@@ -1068,9 +1074,9 @@ and that package's hash, the build environment it names, the board, how
 many files it carries and which patches. In human rendering the
 generator chain is printed the way a manifest states it.
 
-No flags of its own. Calls `read_context_facts`, which reads the
-manifest with `read_context_manifest` where the context is locked, and
-`read_generator_chain` with `format_generator_chain` for the chain.
+No flags of its own. Calls `read_context_facts`, which reads a locked
+context's manifest itself, and `read_generator_chain` with
+`format_generator_chain` for the chain.
 Document: `{ok, context}`. Every key of `context` is optional to a
 consumer and the set is append-only: this is display material, and `id`
 is there only once the context is locked.
@@ -1554,7 +1560,7 @@ which this command line is the worked example of.
 | `device list` | `resolve_project`, `find_devices` |
 | `device info <device>` | `resolve_device`, `validate_device`, `read_build`, `is_busy`, `read_build_report`, `memory_footprint` |
 | `device validate <device>` | `resolve_device`, `validate_device` |
-| `device build [<device>]` | `resolve_device`, `read_model`, `load_model`, `resolve_settings`, `resolve_build_options`, `resolve_builder`, `resolve_build_target`, `resolve_build_mode`, `resolve_signing_key`, `public_key_pem`, `is_p256_public_key`, `build_steps`, `build_firmware`, `sign_firmware`, `read_build_report`, `memory_footprint`, `resolve_shutdown_seconds` |
+| `device build [<device>]` | `resolve_device`, `read_model`, `load_model`, `resolve_settings`, `resolve_build_options`, `resolve_builder`, `resolve_build_target`, `resolve_build_mode`, `open_build_lock`, `resolve_signing_key`, `public_key_pem`, `is_p256_public_key`, `build_steps`, `build_firmware`, `plan_signing`, `sign_firmware`, `read_build_report`, `memory_footprint`, `resolve_shutdown_seconds` |
 | `device generate-application <device>` | `resolve_device`, `load_model`, `generate_application` |
 | `device sign-firmware <device>` | `resolve_device`, `load_model`, `open_build_lock`, `plan_signing`, `sign_firmware` |
 | `device clean [<device>]` | `resolve_project`, `resolve_device`, `find_devices`, `clean_build` |

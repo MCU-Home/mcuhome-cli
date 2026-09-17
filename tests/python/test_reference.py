@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import inspect
 import json
 import re
 from pathlib import Path
@@ -83,6 +84,23 @@ def _expected_flags(command: ref.DocumentedCommand) -> set[str]:
 DOCUMENTED = ref.documented_commands()
 PARSED = _commands(build_parser())
 
+#: The exported names that are functions — what "calls" can mean. A
+#: class the reference names in passing is a type, not a call.
+API_FUNCTIONS = frozenset(
+    name
+    for name in api.__all__
+    if callable(getattr(api, name)) and not inspect.isclass(getattr(api, name))
+)
+
+
+def _api_functions(tokens: list[str]) -> set[str]:
+    """The api functions among *tokens*, calls written with parentheses included."""
+    return {
+        name
+        for name in (re.sub(r"\(.*\)?$", "", token) for token in tokens)
+        if name in API_FUNCTIONS
+    }
+
 
 def _retired_key(entry: object) -> str:
     """The spelling the reference's *Retired* column writes for *entry*."""
@@ -119,6 +137,20 @@ class TestTheTree:
 
     def test_the_index_names_the_same_commands_as_the_headings(self) -> None:
         assert ref.index_commands() == set(DOCUMENTED)
+
+    @pytest.mark.parametrize("words", sorted(DOCUMENTED))
+    def test_the_index_row_names_every_call_the_section_does(self, words: tuple[str, ...]) -> None:
+        """The two places a command's api calls are written agree.
+
+        A command's section names the calls in prose and the index names
+        them in one cell; the cell is what a reader scans, so a call the
+        prose introduced and the cell never learned is a row that lies.
+        Only exported **functions** count — a class in the prose is a
+        type a field carries, not a call — and a name the prose
+        attributes to another call belongs in the api reference rather
+        than here, which is why none of them is written this way.
+        """
+        assert _api_functions(ref.prose_calls()[words]) <= _api_functions(ref.index_calls()[words])
 
     @pytest.mark.parametrize("words", sorted(DOCUMENTED))
     def test_a_command_takes_the_positionals_it_documents(self, words: tuple[str, ...]) -> None:

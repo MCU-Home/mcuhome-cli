@@ -222,9 +222,34 @@ def retired_spellings() -> tuple[dict[str, tuple[str, str]], int]:
 
 def index_commands() -> set[tuple[str, ...]]:
     """The command words of the *Index of commands* table."""
-    found: set[tuple[str, ...]] = set()
+    return set(index_calls())
+
+
+def index_calls() -> dict[tuple[str, ...], list[str]]:
+    """The *Calls* cell of the index, by command words.
+
+    Every backticked token of the cell, in order — the caller decides
+    which of them are api names.
+    """
+    found: dict[tuple[str, ...], list[str]] = {}
     for row in _table_after("| Command | Calls |")[1:]:
         spelling = quoted(row[0])[0]
         words = [token for token in spelling.split() if not token.startswith(("<", "[", "-"))]
-        found.add(tuple(words))
+        found[tuple(words)] = quoted(row[1])
+    return found
+
+
+def prose_calls() -> dict[tuple[str, ...], list[str]]:
+    """Every backticked token of a command section's prose, by command.
+
+    The tables are left out: a flag table's *Carries* column names the
+    api field a flag fills, which is not a call the command makes.
+    """
+    found: dict[tuple[str, ...], list[str]] = {}
+    for heading, body in sections("###"):
+        prose = " ".join(line for line in body if not line.startswith("|"))
+        for spelling in quoted(heading):
+            if not spelling.startswith("mcuhome"):
+                continue
+            found[_spelling(spelling).words] = quoted(prose)
     return found
