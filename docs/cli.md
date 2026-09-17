@@ -205,13 +205,17 @@ own keys; each entry is `message`, `file`, `line`, `column`, `key`,
 `hint`, `kind`. A **negative answer** is the command's own document with
 `ok: false`: a build that ran and failed, a device whose configuration
 is invalid, a host check with a failing finding, a context whose bytes
-no longer match. Its findings are in the `diagnostics` list of the
-result that carries them, never in `errors`. Six commands can answer
-negatively — `device validate`, `device info`, `device build`,
-`device sign-firmware`, `host check` and `context verify`; every other
-command either does what it was asked or refuses. (`sign-firmware`'s
-`ok` says that every file the plan named is there afterwards; a signing
-program that says no is a refusal with its own words, not a false `ok`.)
+no longer match, an upgrade that stopped. Its findings are in the
+`diagnostics` list of the result that carries them, never in `errors`.
+Seven commands can answer negatively — `device validate`,
+`device info`, `device build`, `device sign-firmware`, `host check`,
+`context verify` and `project upgrade`; every other command either does
+what it was asked or refuses. (`sign-firmware`'s `ok` says that every
+file the plan named is there afterwards; a signing program that says no
+is a refusal with its own words, not a false `ok`.) `project upgrade`
+is the one of the seven that answers **no findings**: a run that
+stopped found nothing wrong — it did not finish, and `stopped` with a
+`remaining` that is not empty is the whole statement.
 
 A command that **lists** is neither: its `ok` is the verdict of the
 listing and never of the rows in it. `device list`, `project info` and
@@ -441,7 +445,13 @@ both carry the migration's name.
 
 Document, after a run: `{ok, project, dry_run, from_version,
 to_version, applied, stopped, remaining}` — `UpgradeResult.to_dict()`
-behind the verdict and the project, with `dry_run` false. With
+behind the verdict and the project, with `dry_run` false. A run that
+stopped between migrations answers that same document with `ok: false`
+and exit 1 — a negative answer and not a refusal: the migrations that
+were applied are applied, and `remaining` names the ones to run the
+command again for. A person who declines the question ends the same
+way, and only they ever see it: a machine mode is never interactive, so
+it is never the one being asked. With
 `--dry-run`: `{ok, project, dry_run, plan}`. A project already current
 answers the same keys as a run: `{ok: true, project, dry_run: false,
 from_version, to_version, applied: [], stopped: false, remaining: []}`,
@@ -1279,8 +1289,11 @@ because by then the invocation was not what was wrong.
 
 Every exit code corresponds to the document's `ok`: `0` is `ok: true`,
 `1` and `2` are `ok: false` — as a refusal document with the conditions
-in `errors`, or, for the six commands that can answer negatively, as
-the command's own document with its findings in `diagnostics`. The two
+in `errors`, or, for the seven commands that can answer negatively, as
+the command's own document — with its findings in `diagnostics`, or,
+where nothing was found and the run only did not finish
+(`project upgrade`), with the keys that say what it did and what
+remains. The two
 data documents (`device print-schema`, `device list-supported`) carry no verdict of
 their own: there the exit code is the whole statement.
 
