@@ -30,7 +30,6 @@ from mcuhome.cli.parser import build_parser
 REFUSING = {
     "device flash",
     "device install-bootloader",
-    "environment provision",
     "host check",
 }
 

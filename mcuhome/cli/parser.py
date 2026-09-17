@@ -47,6 +47,7 @@ from mcuhome.cli import (
     contextcommands,
     devicecommands,
     devicedata,
+    environmentcommand,
     optionflags,
     projectcommands,
     secretcommands,
@@ -540,7 +541,7 @@ def _environment(sub: _Area) -> None:
     provision = sub.command(
         "provision",
         _("put a build-environment package into the store"),
-        refuses("environment provision", waits_on=_NOT_YET),
+        environmentcommand.environment_provision,
     )
     _positional(provision, "package", help=_("a package file, or a name with a constraint"))
     _build_options(provision, signing=())
