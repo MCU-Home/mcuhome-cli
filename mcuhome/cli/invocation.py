@@ -54,6 +54,20 @@ class Invocation:
         """One of the command's own flags, or *default* where it has none."""
         return getattr(self.args, name, default)
 
+    def path(self, text: str) -> Path:
+        """One path a flag or a positional carried, as an absolute path.
+
+        ``~`` is expanded against this invocation's environment and a
+        relative path against its working directory, because both are
+        the command line's to resolve: the workbench is handed what was
+        resolved and reads neither the process environment nor the
+        directory the command happened to be typed in.
+        """
+        path = api.expand_user_path(text, env=self.env)
+        if not path.is_absolute():
+            path = self.cwd / path
+        return path.resolve()
+
     # -- the bootstrap ------------------------------------------------
 
     @property

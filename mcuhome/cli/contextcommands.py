@@ -23,7 +23,6 @@ removed when the run is over, wherever the run ends.
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 from typing import Any
 
 from mcuhome.workbench import api
@@ -66,7 +65,7 @@ def validate_create(invocation: Invocation) -> list[api.MCUHomeError]:
     stated = invocation.flag("public_key")
     if stated is None:
         return []
-    path = _path(invocation, str(stated))
+    path = invocation.path(str(stated))
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -125,7 +124,7 @@ def context_create(invocation: Invocation) -> int:
     model = api.load_model(
         entry, project=project, on_warning=lambda finding: output.finding(finding.to_dict())
     )
-    out_dir = _path(invocation, str(invocation.flag("out_dir")))
+    out_dir = invocation.path(str(invocation.flag("out_dir")))
     signing_pub = _public_key(invocation, settings, project)
     invocation.start()
     # Beside the context rather than in a temporary directory of the
@@ -176,7 +175,7 @@ def context_verify(invocation: Invocation) -> int:
     ``mismatches`` — the run happened and the answer is no.
     """
     output = invocation.output
-    root = _path(invocation, str(invocation.flag("directory")))
+    root = invocation.path(str(invocation.flag("directory")))
     invocation.start()
     verification = api.verify_context(root)
     _print_verification(verification, output=output)
@@ -195,7 +194,7 @@ def context_print(invocation: Invocation) -> int:
     happens to render the chain.
     """
     output = invocation.output
-    root = _path(invocation, str(invocation.flag("directory")))
+    root = invocation.path(str(invocation.flag("directory")))
     invocation.start()
     facts = api.read_context_facts(root)
     chain = api.format_generator_chain(api.read_generator_chain(root / api.BUILD_CONTEXT_FILE))
@@ -205,14 +204,6 @@ def context_print(invocation: Invocation) -> int:
 
 
 # -- what these commands share ------------------------------------------
-
-
-def _path(invocation: Invocation, text: str) -> Path:
-    """One path a flag or a positional carried: ``~`` expanded, absolute."""
-    path = api.expand_user_path(text, env=invocation.env)
-    if not path.is_absolute():
-        path = invocation.cwd / path
-    return path.resolve()
 
 
 def _public_key(invocation: Invocation, settings: api.Settings, project: api.Project) -> str:

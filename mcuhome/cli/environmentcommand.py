@@ -69,10 +69,8 @@ def _package(invocation: Invocation) -> Path | str:
     hash is parsed from.
     """
     text = str(invocation.flag("package"))
-    path = api.expand_user_path(text, env=invocation.env)
-    if not path.is_absolute():
-        path = invocation.cwd / path
-    return path.resolve() if path.is_file() else text
+    path = invocation.path(text)
+    return path if path.is_file() else text
 
 
 def _print_entry(entry: api.StoreEntry, *, output: Output) -> None:

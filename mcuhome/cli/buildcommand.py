@@ -297,7 +297,7 @@ def _input(invocation: Invocation) -> tuple[api.DeviceModel, Path, api.Project |
     output = invocation.output
     stated = invocation.flag("model")
     if stated is not None:
-        model = api.read_model(_path(invocation, str(stated)))
+        model = api.read_model(invocation.path(str(stated)))
         return model, _out_dir(invocation, invocation.cwd, model.device.name), None
     project, entry = api.resolve_device(
         str(invocation.flag("device")),
@@ -315,16 +315,8 @@ def _out_dir(invocation: Invocation, base: Path, device: str) -> Path:
     """``--out-dir``, or the device's own build directory under *base*."""
     stated = invocation.flag("out_dir")
     if stated is not None:
-        return _path(invocation, str(stated))
+        return invocation.path(str(stated))
     return (base / api.BUILD_DIR / device).resolve()
-
-
-def _path(invocation: Invocation, text: str) -> Path:
-    """One path a flag carried: ``~`` expanded, absolute, resolved."""
-    path = api.expand_user_path(text, env=invocation.env)
-    if not path.is_absolute():
-        path = invocation.cwd / path
-    return path.resolve()
 
 
 def _selected_builder(
@@ -367,7 +359,7 @@ def _selected_builder(
 def _public_key_path(invocation: Invocation) -> Path | None:
     """The file ``--public-key`` names, or ``None`` where it was not used."""
     stated = invocation.flag("public_key")
-    return None if stated is None else _path(invocation, str(stated))
+    return None if stated is None else invocation.path(str(stated))
 
 
 def _signing_material(
@@ -486,7 +478,7 @@ def _key_problems(invocation: Invocation) -> list[api.MCUHomeError]:
                 ),
             )
         ]
-    path = _path(invocation, str(stated))
+    path = invocation.path(str(stated))
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
