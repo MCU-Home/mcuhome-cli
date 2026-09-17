@@ -19,6 +19,10 @@ from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
 from mcuhome.cli.output import HUMAN, JSON, JSON_STREAM, Output
 
+#: A hint that lays a command out under a sentence — the shape that
+#: shows whether a channel re-indents what it was given.
+HINT = "unset it:\n    unset MCUHOME_DOCKER"
+
 
 def _stream(captured: str) -> list[dict]:
     return [json.loads(line) for line in captured.splitlines() if line]
@@ -115,15 +119,37 @@ class TestTheVerbs:
             {
                 "severity": "error",
                 "message": "MCUHOME_DOCKER is set.",
-                "hint": "unset it:\n    unset MCUHOME_DOCKER",
+                "hint": HINT,
             }
         )
         lines = capsys.readouterr().err.splitlines()
         assert lines == [
             "Error: MCUHOME_DOCKER is set.",
             "  Fix: unset it:",
-            "           unset MCUHOME_DOCKER",
+            "    unset MCUHOME_DOCKER",
         ]
+
+    def test_the_two_channels_lay_the_same_hint_out_the_same_way(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A finding and a refusal are one layout, hint included.
+
+        The same words reach a person down two channels — as a finding
+        beside a document, and as the rendering of what stopped the run
+        — and a hint that laid its commands out did so on purpose. Two
+        indentations for one hint is the reader wondering which of them
+        means something.
+        """
+        Output(mode=HUMAN).finding(
+            {"severity": "error", "message": "MCUHOME_DOCKER is set.", "hint": HINT}
+        )
+        as_finding = capsys.readouterr().err.splitlines()
+
+        Output(mode=HUMAN).errors([UsageError("MCUHOME_DOCKER is set.", hint=HINT)])
+        as_refusal = capsys.readouterr().err.splitlines()
+
+        assert as_finding[1:] == as_refusal[1:]
+        assert as_finding[0].endswith(as_refusal[0])
 
     def test_the_stream_never_carries_translated_vocabulary(
         self, capsys: pytest.CaptureFixture[str]

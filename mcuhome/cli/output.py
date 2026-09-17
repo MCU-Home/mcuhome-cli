@@ -276,12 +276,14 @@ class Output:
     def finding(self, finding: Mapping[str, Any]) -> None:
         """One non-fatal finding, in the shape the mode carries it.
 
-        A finding reaches a person as one line on stderr and a stream as
-        a ``diagnostic`` message. Under ``-o json`` it goes to stderr as
-        text as well, because a document is printed once and only the
-        results that declare a ``diagnostics`` list can carry one — for
-        every other command the stderr line is where the finding is. The
-        line says which severity it is, because a finding carries one.
+        A finding reaches a person on stderr — the condition on its line
+        and its fix under it, exactly as a rendered refusal is laid out
+        — and a stream as a ``diagnostic`` message. Under ``-o json`` it
+        goes to stderr as text as well, because a document is printed
+        once and only the results that declare a ``diagnostics`` list
+        can carry one — for every other command stderr is where the
+        finding is. The first line says which severity it is, because a
+        finding carries one.
         """
         if self.mode == JSON_STREAM:
             self._event({"verb": "diagnostic", "diagnostic": dict(finding)})
@@ -343,14 +345,15 @@ class Output:
         and ``Fix:`` indented under it — because the two say the same
         kind of thing about different conditions. A hint run onto the
         end of the message with a space makes one long line whose second
-        half nobody sees as an instruction, and a hint that is itself
-        several lines makes it unreadable.
+        half nobody sees as an instruction. The hint's own lines are
+        left as they are, again like a refusal: a hint that lays its
+        commands out did so on purpose, and re-indenting it here would
+        make the same hint look different depending on which of the two
+        channels carried it.
         """
         message = str(finding.get("message", ""))
         hint = finding.get("hint")
-        if not hint:
-            return message
-        return f"{message}\n  {_('Fix:')} " + str(hint).replace("\n", "\n       ")
+        return message if not hint else f"{message}\n  {_('Fix:')} {hint}"
 
     def _event(self, message: dict[str, Any]) -> None:
         # One message per line, flushed as it happens: a live consumer is
