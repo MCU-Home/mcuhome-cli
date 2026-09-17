@@ -192,6 +192,110 @@ class TestContextCreate:
         assert code == 0
         assert created.signing_pub == public.read_text(encoding="utf-8")
 
+    @pytest.mark.parametrize(
+        "what",
+        ["missing", "directory", "private", "not-a-key"],
+    )
+    def test_a_public_key_that_is_not_one_is_a_wrong_invocation(
+        self,
+        device: Path,
+        created: FakeContext,
+        tmp_path: Path,
+        what: str,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Every shape of "that is not a public key", before anything runs.
+
+        A file that is not there, a directory, a **private** key, and
+        text that is no key at all: each of them is the invocation being
+        wrong — exit 2, a document in the machine modes, and the pins
+        never resolved.
+        """
+        stated = tmp_path / what
+        if what == "directory":
+            stated.mkdir()
+        elif what == "private":
+            stated.write_text(api.generate_key_pem(), encoding="utf-8")
+        elif what == "not-a-key":
+            stated.write_text("hello", encoding="utf-8")
+        code = main(
+            [
+                "context",
+                "create",
+                "kitchen",
+                "--out-dir",
+                str(device / "ctx"),
+                "--public-key",
+                str(stated),
+                "-o",
+                "json",
+            ]
+        )
+        assert code == 2
+        document = _document(capsys)
+        assert set(document) == {"ok", "errors"}
+        assert document["errors"][0]["kind"] == "UsageError"
+        # The act never started: no context, and no scratch directory.
+        assert created.out_dir is None
+        assert not (device / "ctx").exists()
+        assert not list(device.glob(".mcuhome-*-work"))
+
+    def test_a_private_key_is_refused_by_name(
+        self,
+        device: Path,
+        created: FakeContext,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The whole point of the flag is that the private half stays
+        # where it is, so the refusal says which half was handed over.
+        private = tmp_path / "key.pem"
+        private.write_text(api.generate_key_pem(), encoding="utf-8")
+        code = main(
+            [
+                "context",
+                "create",
+                "kitchen",
+                "--out-dir",
+                str(device / "ctx"),
+                "--public-key",
+                str(private),
+                "-o",
+                "json",
+            ]
+        )
+        assert code == 2
+        entry = _document(capsys)["errors"][0]
+        assert "is a private key" in entry["message"]
+        assert "mcuhome signing print-public-key" in entry["hint"]
+
+    def test_the_stream_still_ends_with_one_result(
+        self,
+        device: Path,
+        created: FakeContext,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # A run that refuses before it starts owes its reader a document
+        # like every other one.
+        code = main(
+            [
+                "context",
+                "create",
+                "kitchen",
+                "--out-dir",
+                str(device / "ctx"),
+                "--public-key",
+                str(tmp_path / "missing"),
+                "-o",
+                "json-stream",
+            ]
+        )
+        assert code == 2
+        messages = _stream(capsys)
+        assert [message["verb"] for message in messages] == ["error", "result"]
+        assert messages[-1]["document"]["ok"] is False
+
     def test_a_build_option_flag_reaches_the_call(
         self, device: Path, created: FakeContext, tmp_path: Path
     ) -> None:

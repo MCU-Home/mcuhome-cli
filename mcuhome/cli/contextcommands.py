@@ -28,12 +28,13 @@ from typing import Any
 
 from mcuhome.workbench import api
 
+from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
 from mcuhome.cli.output import BOLD, DIM, GREEN, RED, Cell, Output, format_table
 from mcuhome.cli.phases import EXIT_FAILURE, EXIT_OK
 
-__all__ = ["context_create", "context_print", "context_verify"]
+__all__ = ["context_create", "context_print", "context_verify", "validate_create"]
 
 #: The facts a context states, in the order a person reads them, with
 #: the label each one is printed under. A key the workbench does not
@@ -49,6 +50,59 @@ _FACT_LABELS = (
     ("build_workspace", _("build workspace")),
     ("build_tools", _("build tools")),
 )
+
+
+def validate_create(invocation: Invocation) -> list[api.MCUHomeError]:
+    """What ``--public-key`` names has to be a public key, and readable.
+
+    The file is read here, in the validate phase, and the text is kept
+    for the run: a file that is missing, a directory, or bytes that are
+    not text is a wrong invocation — exit 2, with the resolution of the
+    pins never started — rather than an exception out of the middle of a
+    command that has already written something. A **private** key is
+    refused by name: the point of the flag is that the private half stays
+    where it is, and a context never carries one.
+    """
+    stated = invocation.flag("public_key")
+    if stated is None:
+        return []
+    path = _path(invocation, str(stated))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return [
+            UsageError(
+                _("{path} is not a readable PEM file.").format(path=path),
+                hint=_(
+                    "write the public half out:\n    mcuhome signing print-public-key > {path}"
+                ).format(path=path),
+            )
+        ]
+    if api.is_p256_private_key(text):
+        return [
+            UsageError(
+                _("{path} is a private key, and --public-key wants the public half.").format(
+                    path=path
+                ),
+                hint=_(
+                    "a context carries the public half alone, so that whoever builds it never "
+                    "has the key. Write that half out and pass it:\n"
+                    "    mcuhome signing print-public-key > <file>"
+                ),
+            )
+        ]
+    if not api.is_p256_public_key(text):
+        return [
+            UsageError(
+                _("{path} is not an ECDSA P-256 public key in PEM form.").format(path=path),
+                hint=_(
+                    "MCUHome signs with ECDSA P-256. Write the public half of your key:\n"
+                    "    mcuhome signing print-public-key > <file>"
+                ),
+            )
+        ]
+    invocation.args.public_key_text = text
+    return []
 
 
 def context_create(invocation: Invocation) -> int:
@@ -77,7 +131,10 @@ def context_create(invocation: Invocation) -> int:
     # Beside the context rather than in a temporary directory of the
     # system's: the SDK package is unpacked here to be read out of bytes
     # that were verified, and that belongs on the same filesystem the
-    # context is being written on.
+    # context is being written on. The name is MCUHome's own, hidden and
+    # prefixed like every other file it writes into a user's directory,
+    # so one left behind by an interrupted run is a leftover and goes
+    # with this one.
     work_root = out_dir.parent / f".mcuhome-{out_dir.name}-work"
     work_root.mkdir(parents=True, exist_ok=True)
     try:
@@ -163,13 +220,15 @@ def _public_key(invocation: Invocation, settings: api.Settings, project: api.Pro
 
     ``--public-key`` names a file — the half to write into the context
     when the private key is somewhere else, which is what a person
-    building on one machine and signing on another has. Without it the
-    key this invocation resolves is read and its public half derived,
-    in memory: a context never carries a private key.
+    building on one machine and signing on another has. Its text was
+    read and checked in the validate phase, so the act starts with a key
+    rather than with a path it still has to open. Without the flag the
+    key this invocation resolves is read and its public half derived, in
+    memory: a context never carries a private key.
     """
-    stated = invocation.flag("public_key")
+    stated = invocation.flag("public_key_text")
     if stated is not None:
-        return _path(invocation, str(stated)).read_text(encoding="utf-8")
+        return str(stated)
     key = api.resolve_signing_key(
         settings.value("signing.key"), env=invocation.env, project=project
     )

@@ -519,6 +519,7 @@ def _context(sub: _Area) -> None:
     _value(create, "--out-dir", metavar="PATH", required=True, help=_("where the context goes"))
     _value(create, "--public-key", metavar="PATH", help=_("the public half to write into it"))
     _build_options(create, signing=_one_option("signing.key"))
+    create.set_defaults(validate=contextcommands.validate_create)
     _finish(create)
 
     verify = sub.command(
