@@ -25,8 +25,13 @@ from pathlib import Path
 import pytest
 from mcuhome.workbench import api
 
-#: The variables a developer's shell may carry that would otherwise win
-#: a layer — or send a test into that developer's own project.
+#: The variables a developer's shell may carry that no declared option
+#: would clear. ``NO_COLOR`` is the one this command line consumes
+#: itself; the four below are the retired spellings the configuration
+#: layer still **reads in order to warn about them**, each producing a
+#: finding — a line on stderr, a ``diagnostic`` message in the stream —
+#: in every run of a developer who has one exported. They are not
+#: options, so the loop over ``api.OPTIONS`` below does not reach them.
 _OWN_ENVIRONMENT = (
     "NO_COLOR",
     "MCUHOME_CCACHE_DIR",
@@ -45,7 +50,10 @@ def _no_real_user_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     directories of the test's own, and every ``MCUHOME_*`` variable is
     dropped — one left standing would silently win a layer and the test
     about what an invocation resolved would answer differently here than
-    on the machine next to it.
+    on the machine next to it. A retired variable would not win a layer
+    but would add a finding to every run, which is the same problem
+    wearing a different hat, so :data:`_OWN_ENVIRONMENT` clears those
+    too.
     """
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
