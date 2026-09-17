@@ -98,13 +98,17 @@ def validate_sign_firmware(invocation: Invocation) -> list[api.MCUHomeError]:
     path = Path(str(stated))
     if not _is_build_target(path):
         return []
+    directory = path if path.is_dir() else path.parent
+    what = _("a build directory") if path.is_dir() else _("a build report")
     return [
         RetiredSpelling(
-            _("mcuhome device sign-firmware does not take a build directory any more.").format(),
+            _("mcuhome device sign-firmware does not take {what} as its positional.").format(
+                what=what
+            ),
             hint=_(
                 "name the device and, where the build is not in its own directory, say where:\n"
                 "    mcuhome device sign-firmware <device> --out-dir {path}"
-            ).format(path=path if path.is_dir() else path.parent),
+            ).format(path=directory),
         )
     ]
 

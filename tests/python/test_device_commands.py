@@ -273,7 +273,9 @@ class TestTheRetiredPositional:
         assert main(["device", "sign-firmware", str(out_dir), "-o", "json"]) == 2
         document = _document(capsys)
         assert document["errors"][0]["kind"] == "RetiredSpelling"
+        assert "a build directory" in document["errors"][0]["message"]
         assert "--out-dir" in document["errors"][0]["hint"]
+        assert str(out_dir) in document["errors"][0]["hint"]
 
     def test_a_build_report_file_is_refused_the_same_way(
         self, device: Path, capsys: pytest.CaptureFixture[str]
@@ -284,6 +286,9 @@ class TestTheRetiredPositional:
         assert main(["device", "sign-firmware", str(report), "-o", "json"]) == 2
         document = _document(capsys)
         assert document["errors"][0]["kind"] == "RetiredSpelling"
+        # Each form is named as what it is, and the hint points at the
+        # directory either way.
+        assert "a build report" in document["errors"][0]["message"]
         assert str(out_dir) in document["errors"][0]["hint"]
 
     def test_a_device_folder_is_not_a_retired_spelling(
