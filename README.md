@@ -1,9 +1,11 @@
 # mcuhome-cli
 
 `mcuhome-cli` is the command line of MCUHome — the `mcuhome` program. It is
-the thin shell over the workbench library: it parses arguments, renders
-output and reads the process environment, while every build, validation and
-signing step it invokes lives in the library.
+the **complete client of the workbench**: everything a person does with
+MCUHome is reachable from here, and none of it happens here. The command
+line parses arguments, renders output and reads the process environment;
+every build, validation and signing step it invokes lives in
+`mcuhome.workbench.api`, which it is also the worked example of.
 
 ## What this repository holds
 
