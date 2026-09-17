@@ -1229,7 +1229,7 @@ reference is where they are defined, and it is the normative one.
 | store entry | `kind`, `name`, `version`, `sha256`, `path` |
 | context verification | `ok`, `root`, `context_id`, `actual_id`, `mismatches` |
 | file mismatch | `path`, `declared_sha256`, `actual_sha256` |
-| context facts | `id` (once locked), `sdk`, `sdk_sha256`, `build_environment`, `board`, `files`, `patches` — display material, every key optional to a consumer, the set append-only |
+| context facts | `id` (once locked), `sdk`, `sdk_sha256`, `build_environment`, `board`, `files`, `patches`, and `build_workspace` / `build_tools` for a context that pins packages — display material, every key optional to a consumer, the set append-only |
 
 Two of the values above are documents of another format and are carried
 through unchanged. The **model** of a validation is the canonical device

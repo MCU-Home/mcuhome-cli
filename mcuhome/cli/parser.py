@@ -44,6 +44,7 @@ from mcuhome.workbench import api
 from mcuhome.cli import (
     buildcommand,
     configcommands,
+    contextcommands,
     devicecommands,
     devicedata,
     optionflags,
@@ -516,9 +517,7 @@ def _signing(sub: _Area) -> None:
 
 def _context(sub: _Area) -> None:
     create = sub.command(
-        "create",
-        _("write a locked build context"),
-        refuses("context create", waits_on=_NOT_YET),
+        "create", _("write a locked build context"), contextcommands.context_create
     )
     _positional(create, "device", help=_("device name or path"))
     _value(create, "--out-dir", metavar="PATH", required=True, help=_("where the context goes"))
@@ -527,16 +526,12 @@ def _context(sub: _Area) -> None:
     _finish(create)
 
     verify = sub.command(
-        "verify",
-        _("check a context against its manifest"),
-        refuses("context verify", waits_on=_NOT_YET),
+        "verify", _("check a context against its manifest"), contextcommands.context_verify
     )
     _positional(verify, "directory", help=_("the context directory"))
     _finish(verify)
 
-    printing = sub.command(
-        "print", _("what a context holds"), refuses("context print", waits_on=_NOT_YET)
-    )
+    printing = sub.command("print", _("what a context holds"), contextcommands.context_print)
     _positional(printing, "directory", help=_("the context directory"))
     _finish(printing)
 
