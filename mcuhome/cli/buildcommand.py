@@ -91,11 +91,27 @@ def validate_build(invocation: Invocation) -> list[api.MCUHomeError]:
                 hint=_("drop the device name, or drop --model"),
             )
         )
-    if (
-        invocation.flag("build_server_token") is not None
-        and invocation.flag("build_server") is None
-    ):
-        problems.append(
+    problems.extend(_token_problems(invocation))
+    problems.extend(_wait_problems(invocation))
+    problems.extend(_key_problems(invocation))
+    return problems
+
+
+def _token_problems(invocation: Invocation) -> list[api.MCUHomeError]:
+    """The build server's credential: whose it is, and where it is read.
+
+    The value a flag carries is settled in the validate phase like every
+    other one, ``-`` included: the read happens here and the answer is
+    kept on the arguments, so the act starts with a credential rather
+    than with a channel it still has to open. A credential that names no
+    server is refused before standard input is touched at all — there is
+    nothing to read it for.
+    """
+    token = invocation.flag("build_server_token")
+    if token is None:
+        return []
+    if invocation.flag("build_server") is None:
+        return [
             UsageError(
                 _("--build-server-token is the credential for --build-server, and none is named."),
                 hint=_(
@@ -104,10 +120,14 @@ def validate_build(invocation: Invocation) -> list[api.MCUHomeError]:
                     "    mcuhome secret set --kind builder --name <builder> --key token --value -"
                 ),
             )
+        ]
+    try:
+        invocation.args.build_server_token = stdinvalue.resolve_value(
+            str(token), flag="--build-server-token"
         )
-    problems.extend(_wait_problems(invocation))
-    problems.extend(_key_problems(invocation))
-    return problems
+    except UsageError as problem:
+        return [problem]
+    return []
 
 
 def build(invocation: Invocation) -> int:
@@ -328,9 +348,9 @@ def _selected_builder(
         return api.SelectedBuilder(
             target=api.TARGET_REMOTE,
             server=str(server),
-            token=stdinvalue.resolve_value(
-                invocation.flag("build_server_token"), flag="--build-server-token"
-            ),
+            # Already read: the validate phase settles what a flag
+            # carries, standard input included.
+            token=invocation.flag("build_server_token"),
         )
     named = invocation.flag("builder")
     if named is None and invocation.flag("build_target") is not None:
