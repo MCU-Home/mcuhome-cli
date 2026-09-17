@@ -13,7 +13,7 @@ build-backend = "hatchling.build"
 # mcuhome-ui and mcuhome-buildserver.
 name = "mcuhome-cli"
 version = "0.1.0.dev0"
-description = "The mcuhome command line: a thin shell over the MCUHome builder library."
+description = "The mcuhome command line: the complete client of the MCUHome workbench."
 readme = "README.md"
 requires-python = ">=3.13"
 license = "Apache-2.0"
@@ -33,12 +33,16 @@ classifiers = [
   "Topic :: Home Automation",
 ]
 # The one dependency, on purpose: this package is the command shell of
-# the library family and adds no behavior of its own. The workbench is
-# the API the shell actually talks to, so it is the declared dependency;
-# its `generate` extra pulls the compiler for when this machine
-# generates a device's Zephyr application itself, and its `remote`
-# extra pulls the session client for the `remote` build target. None of
-# them is published yet — see the README for the dev install.
+# the library family and adds no behavior of its own. It imports exactly
+# one module of the workbench, `mcuhome.workbench.api`, which is that
+# package's supported surface and re-exports what a client needs of the
+# device model — so the workbench is the whole declared edge. Its
+# `generate` extra pulls the code generator, which `mcuhome device
+# generate-application` needs to write a device's Zephyr application on
+# this machine, and its `remote` extra pulls the session client for the
+# `remote` build target; the command line offers both acts, so both
+# extras are asked for rather than left to the installation. Nothing in
+# this family is published yet — see the README for the dev install.
 dependencies = ["mcuhome-workbench[generate,remote]"]
 
 [project.urls]
