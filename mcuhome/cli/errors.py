@@ -19,9 +19,13 @@ call never happens:
     the act exists as a command and MCUHome cannot perform it yet. A
     client greys a button with the reason instead of telling a person
     that something failed.
+``Interrupted``
+    the run was ended by ``Ctrl-C``. The call it was in never answered,
+    so there is no result to render and no exception to name: a machine
+    mode still owes its reader a document, and this is it.
 
-The set is closed and append-only: a ``kind`` that is not one of these
-three is a workbench exception. All three carry the one error document —
+The set is closed and append-only, and is four values today: a ``kind``
+that is not one of them is a workbench exception. All four carry the one error document —
 ``message``, ``file``, ``line``, ``column``, ``key``, ``hint``,
 ``kind`` — with no file to point at, so that a consumer reads one shape
 whoever refused.
@@ -43,6 +47,7 @@ from mcuhome.cli.phases import EXIT_FAILURE, EXIT_USAGE
 __all__ = [
     "CapabilityUnavailable",
     "CommandLineRefusal",
+    "Interrupted",
     "RetiredSpelling",
     "UsageError",
     "exit_code_for",
@@ -52,7 +57,7 @@ __all__ = [
 class CommandLineRefusal(MCUHomeError):
     """A refusal this command line states itself.
 
-    Never raised directly — the three conditions below are the whole
+    Never raised directly — the four conditions below are the whole
     vocabulary, and each of them is listed in ``docs/cli.md``.
     """
 
@@ -96,6 +101,10 @@ class RetiredSpelling(CommandLineRefusal):
 
 class CapabilityUnavailable(CommandLineRefusal):
     """The act has a command and MCUHome cannot perform it yet."""
+
+
+class Interrupted(CommandLineRefusal):
+    """``Ctrl-C`` ended the run before it answered."""
 
 
 def exit_code_for(error: MCUHomeError) -> int:

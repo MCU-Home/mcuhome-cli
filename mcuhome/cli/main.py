@@ -42,7 +42,7 @@ from mcuhome.workbench import api
 from mcuhome.cli import optionflags, phases
 from mcuhome.cli import output as output_module
 from mcuhome.cli import parser as parser_module
-from mcuhome.cli.errors import UsageError, exit_code_for
+from mcuhome.cli.errors import Interrupted, UsageError, exit_code_for
 from mcuhome.cli.i18n import _
 from mcuhome.cli.invocation import Invocation
 from mcuhome.cli.retiredspellings import refuse_retired_spelling
@@ -116,10 +116,27 @@ def main(argv: list[str] | None = None) -> int:
         # The two commands that stop cleanly do it through their stop
         # predicate; everywhere else, and after a second Ctrl-C, the run
         # ends here and what a half-written act left is what the api
-        # says it leaves.
+        # says it leaves. A machine mode is owed a document either way:
+        # a stream that ends without its `result` line is a stream a
+        # consumer waits on forever.
         sys.stdout.flush()
-        output.log(_("Interrupted."))
+        if not output.answered:
+            output.errors([_interrupted()], cwd=Path.cwd())
         return phases.EXIT_FAILURE
+
+
+def _interrupted() -> Interrupted:
+    """What a run ended by ``Ctrl-C`` answers, in every mode.
+
+    A person sees the sentence on stderr and a machine reads the refusal
+    document; the hint is what the two commands that stop cleanly have
+    already said in their own words, and the only useful thing to say
+    for every other one — nothing here knows what the act got through.
+    """
+    return Interrupted(
+        _("Interrupted."),
+        hint=_("nothing was undone; check what the command had reached before you run it again"),
+    )
 
 
 def _validate(invocation: Invocation) -> list[api.MCUHomeError]:

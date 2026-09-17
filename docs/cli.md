@@ -236,18 +236,19 @@ exception itself.
 
 **The `kind` of a refusal** is the name of the condition, and almost
 every value comes from the workbench, where it is the exception's class
-name and is listed in its reference. The command line adds three of its
+name and is listed in its reference. The command line adds four of its
 own, for conditions no api call can raise because the call never
-happens:
+happens, or because the call was ended from outside:
 
 | `kind` | Condition |
 |---|---|
 | `UsageError` | the invocation was wrong: an unknown command or flag, a missing argument, flags that contradict each other, a value of the wrong shape |
 | `RetiredSpelling` | a command or flag this command line used to have; the message names the successor |
 | `CapabilityUnavailable` | the act exists as a command and MCUHome cannot perform it yet; the message names the work it waits on |
+| `Interrupted` | the run was ended by `Ctrl-C` and did not finish what it was asked |
 
-The set is append-only and complete: a `kind` that is not one of these
-three is a workbench exception.
+The set is append-only and is four values today: a `kind` that is not
+one of them is a workbench exception.
 
 **Interactive mode.** A command asks its questions up front, before it
 starts, and only when the run is interactive (a terminal, no

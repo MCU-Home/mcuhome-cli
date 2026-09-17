@@ -13,7 +13,7 @@ from importlib.metadata import entry_points
 
 import pytest
 
-from mcuhome.cli import phases
+from mcuhome.cli import phases, versioncommand
 from mcuhome.cli.main import main
 from mcuhome.cli.parser import build_parser, read_presentation
 
@@ -160,3 +160,41 @@ class TestExitCodes:
         assert main(["device", "flash", "kitchen", "-o", "json"]) == 1
         document = json.loads(capsys.readouterr().out)
         assert document["errors"][0]["kind"] == "CapabilityUnavailable"
+
+
+class TestInterrupted:
+    """``Ctrl-C`` ends a run, and a machine mode still reads a document."""
+
+    @pytest.fixture(autouse=True)
+    def _interrupt_the_act(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every command is driven the same way; this ends one of them."""
+
+        def ended() -> dict[str, str]:
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(versioncommand.api, "stack_versions", ended)
+
+    def test_the_document_names_the_condition_and_exits_one(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["version", "-o", "json"]) == phases.EXIT_FAILURE
+        document = json.loads(capsys.readouterr().out)
+        assert set(document) == {"ok", "errors"}
+        assert document["ok"] is False
+        assert document["errors"][0]["kind"] == "Interrupted"
+
+    def test_the_stream_still_ends_with_exactly_one_result(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["version", "-o", "json-stream"]) == phases.EXIT_FAILURE
+        messages = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+        assert [message["verb"] for message in messages] == ["start", "error", "result"]
+        assert messages[-1]["document"]["errors"][0]["kind"] == "Interrupted"
+
+    def test_a_person_reads_it_on_stderr_and_stdout_stays_empty(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["version"]) == phases.EXIT_FAILURE
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "Interrupted." in captured.err
