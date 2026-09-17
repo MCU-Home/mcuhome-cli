@@ -21,8 +21,8 @@ goes to a file (``build.log`` in the build directory), and the line
 above the frame says so. The frame belongs to the step that is
 *producing* output: it opens with that step's first log line and closes
 again when the step ends, so a build that is packing a context or
-signing an image shows no empty box pretending output went missing
-(PO 2026-08-16). When the build ends the frame collapses: a finished
+settling a build environment shows no empty box pretending output went
+missing. When the build ends the frame collapses: a finished
 build leaves the step line and the summary, a failed one leaves the step
 line, the tail of the log and the refusal — the things worth keeping are
 exactly the things that remain.
@@ -35,12 +35,13 @@ terminal rather than living inside the repainted region.
 **Two implementations, one seam.** :func:`make_view` answers with the
 live view only when the run is interactive (a TTY, no
 ``--no-interactive``, not a machine mode); everywhere else —  CI, pipes,
-``-o json``/``json-stream`` — :class:`PlainView` keeps today's linear
-behavior: log lines pass through (stdout for a human, stderr under a
-machine mode) and steps print nothing of their own, because the machine
-modes already carry them as ``progress`` verbs and a linear human run
-sees the log itself. Both write the log file; the file is part of the
-contract, not of the rendering.
+``-o json``/``json-stream`` — :class:`PlainView` is linear: the log
+lines pass through to **stderr**, whatever the mode, because stdout
+carries the document or the human rendering and nothing else, and steps
+print nothing of their own, because the machine modes already carry them
+as ``progress`` verbs and a linear human run sees the log itself. Both
+write the log file; the file is part of the contract, not of the
+rendering.
 
 Repaints happen under a lock and are throttled: the log lines arrive
 from whatever thread drives the build (the container reader, the west
@@ -83,7 +84,7 @@ RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 
-#: How many log lines the live frame shows at once (PO 2026-08-15).
+#: How many log lines the live frame shows at once.
 WINDOW_LINES = 15
 
 #: The full build log, next to the artifacts in the build directory.
@@ -274,22 +275,20 @@ class _ViewBase:
 
 @dataclass
 class PlainView(_ViewBase):
-    """Today's linear behavior, plus the log file.
+    """The linear rendering, plus the log file.
 
-    Log lines pass through — stdout for a human, stderr under a machine
-    mode, where stdout belongs to the document — and the steps print
-    nothing: a linear human run watches the log itself, and the machine
-    modes carry the steps as ``progress`` verbs already.
+    Log lines pass through to stderr in every mode — stdout belongs to
+    the document or to the human rendering, so redirecting it into a file
+    leaves both halves intact — and the steps print nothing: a linear
+    human run watches the log itself, and the machine modes carry the
+    steps as ``progress`` verbs already.
     """
 
     def _on_change(self) -> None:
         pass
 
     def _on_line(self, text: str) -> None:
-        if self.output.machine:
-            self.output.log(text)
-        else:
-            print(text)
+        self.output.log(text)
 
     def _on_note(self, text: str) -> None:
         # A machine mode already carries the facts behind the note as

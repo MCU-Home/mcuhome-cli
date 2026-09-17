@@ -88,7 +88,7 @@ def test_the_block_repaints_in_place_at_constant_height(tmp_path) -> None:
 
 
 def test_a_step_without_output_shows_no_frame_at_all(tmp_path) -> None:
-    """The frame belongs to the step producing output (PO 2026-08-16).
+    """The frame belongs to the step producing output.
 
     Packing a context prints nothing, and an empty box over it reads as
     output that went missing.
@@ -197,12 +197,20 @@ def test_foreign_escape_codes_cannot_break_the_frame(tmp_path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_plain_view_passes_lines_through(tmp_path, capsys) -> None:
-    view = PlainView(_steps(), output=PLAIN, log_path=tmp_path / "build.log")
+@pytest.mark.parametrize("output", [PLAIN, MACHINE])
+def test_the_plain_view_passes_lines_through_to_stderr(tmp_path, capsys, output) -> None:
+    """Build output is not the document and not the human rendering.
+
+    Whatever the mode, stdout carries one of those two and nothing else,
+    so redirecting it into a file leaves both halves intact.
+    """
+    view = PlainView(_steps(), output=output, log_path=tmp_path / "build.log")
     view.step("compile")
     view.line("west said this")
     view.close(success=True)
-    assert "west said this" in capsys.readouterr().out
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "west said this" in captured.err
     assert "west said this" in (tmp_path / "build.log").read_text("utf-8")
 
 
@@ -218,15 +226,6 @@ def test_the_plain_view_prints_notes_but_a_machine_mode_does_not(tmp_path, capsy
     view.close(success=True)
     captured = capsys.readouterr()
     assert captured.out == "" and captured.err == ""
-
-
-def test_under_a_machine_mode_lines_go_to_stderr(tmp_path, capsys) -> None:
-    view = PlainView(_steps(), output=MACHINE, log_path=tmp_path / "build.log")
-    view.line("west said this")
-    view.close(success=True)
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert "west said this" in captured.err
 
 
 # --------------------------------------------------------------------------
