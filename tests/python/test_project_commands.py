@@ -45,6 +45,29 @@ def old_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return root
 
 
+@pytest.fixture
+def interrupted_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A project an upgrade died in: the marker renamed, nothing finished.
+
+    What a killed ``project upgrade`` leaves behind — the marker under
+    its ``.upgrade`` name, with the record of the run that never came
+    back.
+    """
+    root = tmp_path / "half"
+    (root / "devices").mkdir(parents=True)
+    (root / api.UPGRADE_MARKER_FILE).write_text(
+        "version = 1\n"
+        'id = "01a0b2c3-d4e5-7f60-8a9b-0c1d2e3f4a5b"\n'
+        "\n[upgrade]\n"
+        'started = "2026-09-17T09:00:00Z"\n'
+        "process = 4242\n"
+        'running = "v2_secrets_layout"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(root)
+    return root
+
+
 class TestProjectInit:
     def test_it_creates_the_project_and_names_what_it_wrote(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -160,6 +183,48 @@ class TestProjectInfo:
         assert main(["project", "info", "plain", "-o", "json"]) == 1
         document = _document(capsys)
         assert api.PROJECT_MARKER_FILE in document["errors"][0]["message"]
+
+    def test_the_refusal_names_the_positional_and_not_a_flag_nobody_typed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "plain").mkdir()
+        assert main(["project", "info", "nope", "-o", "json"]) == 1
+        assert "--project-dir" not in _document(capsys)["errors"][0]["message"]
+        assert main(["project", "info", "plain", "-o", "json"]) == 1
+        assert "--project-dir" not in (_document(capsys)["errors"][0]["hint"] or "")
+        # The flag, where it was the flag that named it.
+        assert main(["project", "info", "--project-dir", "plain", "-o", "json"]) == 1
+        assert "--project-dir" in (_document(capsys)["errors"][0]["hint"] or "")
+
+    def test_a_project_whose_upgrade_was_interrupted_is_described(
+        self, interrupted_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Every other command refuses this project, which is exactly why
+        # this one has to describe it: `upgrading` and the plan are what
+        # a person came here to read.
+        assert main(["project", "info", "-o", "json"]) == 0
+        document = _document(capsys)
+        assert document["ok"] is True
+        assert document["upgrading"] is True
+        assert document["project"]["version"] == 1
+        assert [migration["name"] for migration in document["plan"]] == ["v2_secrets_layout"]
+
+    def test_a_person_is_told_that_an_upgrade_is_in_flight(
+        self, interrupted_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        assert main(["project", "info"]) == 0
+        assert "interrupted" in capsys.readouterr().out
+
+    def test_every_other_command_still_refuses_that_project(
+        self, interrupted_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # Describing one is `info`'s alone: a half-migrated project is
+        # not one to migrate again, and the way out is the backup.
+        assert main(["project", "upgrade", "--dry-run", "-o", "json"]) == 1
+        assert _document(capsys)["errors"][0]["kind"] == "UpgradeInterrupted"
+        assert main(["device", "info", "kitchen", "-o", "json"]) == 1
+        assert _document(capsys)["errors"][0]["kind"] == "UpgradeInterrupted"
 
     def test_outside_a_project_it_refuses(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

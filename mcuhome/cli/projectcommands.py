@@ -78,8 +78,14 @@ def project_init(invocation: Invocation) -> int:
 
 
 def project_info(invocation: Invocation) -> int:
-    """``mcuhome project info [<directory>]``: where the project is and what it holds."""
-    project = _project(invocation)
+    """``mcuhome project info [<directory>]``: where the project is and what it holds.
+
+    The one command that describes a project every other command
+    refuses: an upgrade that is running, or one that died half-way,
+    leaves a project nothing may work on — and this is what a person
+    runs to find out that that is where they are.
+    """
+    project = _project(invocation, allow_upgrading=True)
     invocation.start()
     upgrading = api.is_upgrading(project.root)
     plan = api.plan_upgrade(_version(project))
@@ -438,23 +444,33 @@ def _stated_directory(invocation: Invocation) -> Path | None:
     return directory.resolve()
 
 
-def _project(invocation: Invocation) -> api.Project:
+def _project(invocation: Invocation, *, allow_upgrading: bool = False) -> api.Project:
     """The project ``info`` and ``upgrade`` work on, version check off.
 
     These are the two commands a person runs *because* something refused
     them, so a project whose layout is too old is described rather than
     refused.
+
+    *allow_upgrading* is ``info``'s alone: a project whose upgrade is
+    running, or was interrupted, is what that command exists to describe,
+    while ``upgrade`` must still refuse it — a half-migrated project is
+    not one to migrate again, and the way out is the backup.
+
+    The stated directory goes through the same ladder the flag runs
+    through, so a directory that is not there, or is there and is no
+    project, is refused in the same words whichever way it was named —
+    and the refusal names *this* command's positional rather than a flag
+    nobody typed.
     """
     stated = _stated_directory(invocation)
-    if stated is not None:
-        # The same ladder the flag runs through, so a directory that is
-        # not there, or is there and is no project, is refused in the
-        # same words whichever way it was named — rather than as a
-        # project file that cannot be read.
-        return api.resolve_project(
-            stated, env=invocation.env, cwd=invocation.cwd, require_version=False
-        )
-    return invocation.project(require_version=False)
+    return api.resolve_project(
+        stated if stated is not None else invocation.project_dir,
+        env=invocation.env,
+        cwd=invocation.cwd,
+        require_version=False,
+        allow_upgrading=allow_upgrading,
+        stated_as="<directory>" if stated is not None else "",
+    )
 
 
 def _version(project: api.Project) -> int:
