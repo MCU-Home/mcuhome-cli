@@ -30,12 +30,6 @@ from mcuhome.cli.parser import build_parser
 REFUSING = {
     "device flash",
     "device install-bootloader",
-    "secret list-scopes",
-    "secret list",
-    "secret reveal",
-    "secret set",
-    "secret unset",
-    "secret delete",
     "signing print-public-key",
     "signing create-key",
     "context create",

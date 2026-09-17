@@ -48,6 +48,7 @@ from mcuhome.cli import (
     devicedata,
     optionflags,
     projectcommands,
+    secretcommands,
 )
 from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
@@ -458,26 +459,20 @@ def _secret(sub: _Area) -> None:
     scopes = sub.command(
         "list-scopes",
         _("every scope this project could have"),
-        refuses("secret list-scopes", waits_on=_NOT_YET),
+        secretcommands.secret_list_scopes,
     )
     _finish(scopes)
 
-    listing = sub.command(
-        "list",
-        _("the keys of one scope, masked"),
-        refuses("secret list", waits_on=_NOT_YET),
-    )
+    listing = sub.command("list", _("the keys of one scope, masked"), secretcommands.secret_list)
     _scope_of_secret(listing)
     _finish(listing)
 
-    reveal = sub.command(
-        "reveal", _("one secret's value"), refuses("secret reveal", waits_on=_NOT_YET)
-    )
+    reveal = sub.command("reveal", _("one secret's value"), secretcommands.secret_reveal)
     _value(reveal, "--key", metavar="KEY", required=True, help=_("the key to answer"))
     _scope_of_secret(reveal)
     _finish(reveal)
 
-    setting = sub.command("set", _("write one key"), refuses("secret set", waits_on=_NOT_YET))
+    setting = sub.command("set", _("write one key"), secretcommands.secret_set)
     _value(setting, "--key", metavar="KEY", required=True, help=_("the key to write"))
     _value(
         setting,
@@ -487,20 +482,15 @@ def _secret(sub: _Area) -> None:
         help=_("the value; - reads it from stdin"),
     )
     _scope_of_secret(setting)
+    setting.set_defaults(validate=secretcommands.validate_set)
     _finish(setting)
 
-    unsetting = sub.command(
-        "unset", _("remove one key"), refuses("secret unset", waits_on=_NOT_YET)
-    )
+    unsetting = sub.command("unset", _("remove one key"), secretcommands.secret_unset)
     _value(unsetting, "--key", metavar="KEY", required=True, help=_("the key to remove"))
     _scope_of_secret(unsetting)
     _finish(unsetting)
 
-    deleting = sub.command(
-        "delete",
-        _("remove a whole secrets file"),
-        refuses("secret delete", waits_on=_NOT_YET),
-    )
+    deleting = sub.command("delete", _("remove a whole secrets file"), secretcommands.secret_delete)
     _scope_of_secret(deleting, required=True)
     _finish(deleting)
 

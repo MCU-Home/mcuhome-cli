@@ -973,7 +973,9 @@ One secret's value — the one command that answers one.
 Human rendering prints the value alone on stdout, with no decoration, so
 it can be read into a variable. The `signing` scope is refused: key
 material is neither printed nor typed in.
-Calls `reveal_secret`, which answers the value itself.
+Calls `read_secrets` for the scope — the same scope document every other
+command here names, rather than one assembled out of the two flags — and
+`reveal_secret`, which answers the value itself.
 Document: `{ok, scope, key, value}` — the one document of this command
 line that carries a secret, because asking for exactly this value is
 what the command is.
@@ -1592,7 +1594,7 @@ which this command line is the worked example of.
 | `device install-bootloader <device>` | — (refuses) |
 | `secret list-scopes` | `resolve_project`, `find_secret_scopes` |
 | `secret list` | `resolve_project`, `read_secrets` |
-| `secret reveal` | `resolve_project`, `reveal_secret` |
+| `secret reveal` | `resolve_project`, `read_secrets`, `reveal_secret` |
 | `secret set` | `resolve_project`, `set_secret` |
 | `secret unset` | `resolve_project`, `unset_secret` |
 | `secret delete` | `resolve_project`, `delete_secret_file` |
