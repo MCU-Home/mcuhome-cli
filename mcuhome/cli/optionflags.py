@@ -151,7 +151,10 @@ def add_option_flags(
                 flag.spelling, dest=flag.dest, action="store_true", default=None, help=flag.help
             )
             target.add_argument(
-                flag.negative, dest=flag.dest, action="store_false", help=argparse.SUPPRESS
+                flag.negative,
+                dest=flag.dest,
+                action="store_false",
+                help=_("{option} turned off").format(option=flag.option.name),
             )
             continue
         target.add_argument(

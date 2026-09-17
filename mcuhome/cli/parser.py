@@ -212,7 +212,12 @@ def build_parser() -> argparse.ArgumentParser:
 def _project(sub: _Area) -> None:
     init = sub.command("init", _("create a project"), projectcommands.project_init)
     _positional(init, "directory", optional=True, help=_("where the project goes"))
-    _switch(init, "--force", negatable=True, help=_("write into a directory that is not empty"))
+    _switch(
+        init,
+        "--force",
+        help=_("write into a directory that is not empty"),
+        negated=_("refuse a directory that is not empty (the default)"),
+    )
     _finish(init)
 
     info = sub.command(
@@ -306,7 +311,10 @@ def _device(sub: _Area) -> None:
         help=_("the build environment this build asks for"),
     )
     _switch(
-        build, "--wait-for-turn", negatable=True, help=_("wait when a build server has no room")
+        build,
+        "--wait-for-turn",
+        help=_("wait when a build server has no room"),
+        negated=_("refuse rather than wait when a build server has no room"),
     )
     _value(
         build,
@@ -315,7 +323,12 @@ def _device(sub: _Area) -> None:
         help=_("the bound of that wait; 0 removes it"),
     )
     _value(build, "--public-key", metavar="PATH", help=_("the public half to compile in"))
-    _switch(build, "--sign", negatable=True, help=_("sign the delivered image here"))
+    _switch(
+        build,
+        "--sign",
+        help=_("sign the delivered image here"),
+        negated=_("leave the delivered image unsigned"),
+    )
     _build_options(build)
     _finish(build)
 
@@ -359,7 +372,12 @@ def _device(sub: _Area) -> None:
         "delete", _("remove a device"), refuses("device delete", waits_on=_NOT_YET)
     )
     _positional(delete, "device", help=_("device name or path"))
-    _switch(delete, "--keep-secrets", negatable=True, help=_("keep the device's secrets file"))
+    _switch(
+        delete,
+        "--keep-secrets",
+        help=_("keep the device's secrets file"),
+        negated=_("remove the device's secrets file as well (the default)"),
+    )
     _switch(delete, "--force", help=_("do not ask, even in an interactive run"))
     _finish(delete)
 
@@ -377,7 +395,12 @@ def _device(sub: _Area) -> None:
         refuses("device create-matter-pairing", waits_on=_NOT_YET),
     )
     _positional(create_pairing, "device", help=_("device name or path"))
-    _switch(create_pairing, "--force", negatable=True, help=_("replace credentials it already has"))
+    _switch(
+        create_pairing,
+        "--force",
+        help=_("replace credentials it already has"),
+        negated=_("refuse credentials that are already there (the default)"),
+    )
     _finish(create_pairing)
 
     schema = sub.command(
@@ -586,22 +609,22 @@ def _positional(
 
 
 def _switch(
-    parser: argparse.ArgumentParser, spelling: str, *, help: str, negatable: bool = False
+    parser: argparse.ArgumentParser, spelling: str, *, help: str, negated: str = ""
 ) -> None:
     """A flag with no value.
 
-    *negatable* gives it both spellings, which is what a flag carrying a
-    request field always has and what a flag of the command's own has
-    where its default is "on": "not used" and "turned off" are different
-    statements, and where the default is off there is nothing for
-    ``--no-x`` to name.
+    *negated* is the help of the ``--no-x`` spelling, and giving it is
+    what creates that spelling. Both exist for a flag carrying a request
+    field, and for a flag of the command's own where the default is
+    "on": "not used" and "turned off" are different statements, and
+    where the default is off there is nothing for ``--no-x`` to name.
+    Both are listed in the help, because a spelling a person cannot find
+    is a spelling they do not have.
     """
     dest = spelling[2:].replace("-", "_")
     parser.add_argument(spelling, dest=dest, action="store_true", default=None, help=help)
-    if negatable:
-        parser.add_argument(
-            f"--no-{spelling[2:]}", dest=dest, action="store_false", help=argparse.SUPPRESS
-        )
+    if negated:
+        parser.add_argument(f"--no-{spelling[2:]}", dest=dest, action="store_false", help=negated)
 
 
 def _value(
