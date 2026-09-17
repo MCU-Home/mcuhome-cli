@@ -229,12 +229,20 @@ while `diagnostics` is what a result answers and holds errors and
 warnings together, each with its `severity`. A client reads one or the
 other, never both of one command.
 
-**Every path in an error document is absolute**, in both lists. The
-machine modes are read by programs that are not standing in the project
-— a build server, an editor, a job on another machine — and a relative
-path is only a path once its reader knows what to join it to. The human
-rendering shortens paths against the working directory, which is a
-rendering and not a document.
+**Every path in the refusal document's `errors` list is absolute.** That
+list is the command line's own rendering of what stopped the run, and
+the machine modes are read by programs that are not standing in the
+project — a build server, an editor, a job on another machine — so a
+path they can open beats one they would have to join. The human
+rendering shortens the same paths against the working directory, which
+is a rendering and not a document.
+
+`diagnostics` is the other list and keeps the workbench's shape: its
+paths are **relative to the project root**, because a result that
+describes a project's files states them the way that project sees them,
+and the same finding travels with the same spelling wherever the result
+goes. A client that needs one absolute joins it to the root
+`mcuhome project info` answers.
 
 In `human` a refusal is rendered on stderr; in the machine modes stdout
 carries the refusal document, and in `json-stream` each entry also
