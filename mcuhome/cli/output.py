@@ -337,25 +337,21 @@ class Output:
 
     # -- errors, in every mode ----------------------------------------
 
-    def errors(
-        self,
-        problems: Sequence[MCUHomeError],
-        *,
-        root: Path | None = None,
-        cwd: Path | None = None,
-    ) -> None:
+    def errors(self, problems: Sequence[MCUHomeError], *, cwd: Path | None = None) -> None:
         """Rendered refusals — stderr for a human, the failure document else.
 
-        *root* makes file paths project-relative in the serialized form;
-        *cwd* shortens them in the human one. The caller supplies the
-        exit code — this only says what went wrong, in the mode's shape.
+        *cwd* shortens file paths in the human rendering. The document
+        keeps them **absolute**: a program reading it is not necessarily
+        standing in the project, and a relative path is only a path once
+        its reader knows what to join it to. The caller supplies the exit
+        code — this only says what went wrong, in the mode's shape.
         """
         if self.mode == HUMAN:
             base = Path.cwd() if cwd is None else cwd
             for problem in problems:
                 self.log(self._render(problem, base))
             return
-        entries = [entry for problem in problems for entry in error_dicts(problem, root=root)]
+        entries = [entry for problem in problems for entry in error_dicts(problem)]
         for entry in entries:
             self.error(entry)
         self.result({"ok": False, "errors": entries})

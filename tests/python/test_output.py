@@ -10,6 +10,7 @@ what those documents travel in.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from mcuhome.workbench import api
@@ -147,6 +148,18 @@ class TestSayingNo:
     def test_an_error_document_carries_every_key_it_declares(self) -> None:
         document = UsageError("wrong").to_dict()
         assert list(document) == ["message", "file", "line", "column", "key", "hint", "kind"]
+
+    def test_an_error_document_names_a_file_absolutely(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # A program reading the document is not necessarily standing in
+        # the project, so a path it can open beats one it has to join.
+        file = tmp_path / "mcuhome.yaml"
+        output = Output(mode=JSON)
+        output.errors(
+            [api.ConfigError("no such option", location=api.Location(file=file))], cwd=tmp_path
+        )
+        assert json.loads(capsys.readouterr().out)["errors"][0]["file"] == str(file)
 
 
 class TestResolving:
