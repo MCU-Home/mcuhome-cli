@@ -109,3 +109,27 @@ def environment(monkeypatch: pytest.MonkeyPatch) -> Mapping[str, str]:
     import os
 
     return dict(os.environ)
+
+
+#: The board the device fixtures are built for. One of the boards the
+#: workbench knows, named rather than picked, so a change to the table
+#: does not silently change what these tests build.
+BOARD = "nrf7002dk/nrf5340/cpuapp"
+
+
+@pytest.fixture
+def device(in_project: Path) -> Path:
+    """A project with one device that validates, and a signing key.
+
+    Everything a build needs before it starts: the device folder, the
+    commissioning credentials its Matter stack requires, and the key the
+    delivered image is signed with. Made through the api, because a tree
+    scribbled here would be a project MCUHome never writes.
+    """
+    import os
+
+    project = api.read_project(in_project)
+    new = api.create_device("kitchen", project=project, board=BOARD)
+    api.create_pairing(Path(new.entry), project=project)
+    api.create_signing_key(env=dict(os.environ), project=project)
+    return in_project

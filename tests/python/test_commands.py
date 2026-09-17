@@ -32,7 +32,6 @@ REFUSING = {
     "device list",
     "device info",
     "device validate",
-    "device build",
     "device generate-application",
     "device sign-firmware",
     "device clean",

@@ -41,7 +41,7 @@ from typing import Any
 
 from mcuhome.workbench import api
 
-from mcuhome.cli import configcommands, optionflags, projectcommands
+from mcuhome.cli import buildcommand, configcommands, optionflags, projectcommands
 from mcuhome.cli import output as output_module
 from mcuhome.cli.errors import UsageError
 from mcuhome.cli.i18n import _
@@ -290,9 +290,7 @@ def _device(sub: _Area) -> None:
     _switch(validate, "--show-sensitive", help=_("print the commissioning credentials"))
     _finish(validate)
 
-    build = sub.command(
-        "build", _("build firmware and sign it"), refuses("device build", waits_on=_NOT_YET)
-    )
+    build = sub.command("build", _("build firmware and sign it"), buildcommand.build)
     _positional(build, "device", optional=True, help=_("device name or path"))
     _value(build, "--model", metavar="PATH", help=_("a canonical model instead of a device"))
     _value(build, "--out-dir", metavar="PATH", help=_("the build directory"))
@@ -330,6 +328,7 @@ def _device(sub: _Area) -> None:
         negated=_("leave the delivered image unsigned"),
     )
     _build_options(build)
+    build.set_defaults(validate=buildcommand.validate_build)
     _finish(build)
 
     generate = sub.command(

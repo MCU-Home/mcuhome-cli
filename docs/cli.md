@@ -25,7 +25,7 @@ open.
 $ mcuhome project init thermostats
 $ cd thermostats
 $ mcuhome signing create-key
-$ mcuhome device new kitchen --board esp32c6_devkitc
+$ mcuhome device new kitchen --board nrf7002dk/nrf5340/cpuapp
 $ mcuhome device build kitchen
 ```
 
@@ -639,8 +639,8 @@ for one run.
 | `--out-dir` | path | `BuildRequest.out_dir` — default `<project>/build/<device>/`, and `<cwd>/build/<device>/` for a `--model` build |
 | `--builder` | name | `BuildRequest.builder` — the configured builder this build runs at, resolved by name |
 | `--build-server` | address | `SelectedBuilder.server` — a build server named for this invocation, without configuring a builder |
-| `--build-server-token` | token, or `-` to read it from stdin | `SelectedBuilder.token` — the credential for that server |
-| `--container-image` | repository, `:tag`, `@sha256:…` or a repository with either | `BuildRequest.container_image` — the build environment this build asks for; refused for a build that starts no container (`--build-mode subprocess`), because a pin that is silently ignored is worse than a refusal |
+| `--build-server-token` | token, or `-` to read it from stdin | `SelectedBuilder.token` — the credential for that server, and only for it: without `--build-server` it names nothing and is refused |
+| `--container-image` | repository, `:tag`, `@sha256:…` or a repository with either | `BuildRequest.container_image` — the build environment this build asks for; refused for a build that starts no container (`--build-mode subprocess`), because a pin that is silently ignored is worse than a refusal. The refusal is the workbench's, so it names where the mode came from — this flag, a configuration file, a variable — and it is exit 1 like every other answer a run gives |
 | `--wait-for-turn` / `--no-wait-for-turn` | — | `BuildRequest.wait_for_turn`, default on — wait when a build server has no room |
 | `--max-wait-seconds` | seconds | `BuildRequest.max_wait_seconds` — the bound of that wait; `0` removes it |
 | `--public-key` | path | `BuildRequest.signing_pub` — the public half to compile into the bootloader when the private key is elsewhere; only with `--no-sign`. It is named after the file it takes rather than after the field, the one request-field flag that does not derive letter for letter: the field holds PEM text and the flag holds a path to it |
@@ -681,7 +681,9 @@ it is given, not parameters of the call; then `read_build_report` with
 `memory_footprint` for the footprint, and `sign_firmware` with the
 device's model, which writes the signed images and, for a device that
 takes them, the Matter OTA image. `resolve_shutdown_seconds` is what a
-stop reports as its bound.
+stop reports as its bound. Under `-v` in `human`, `plan_signing` is
+called first and its commands are printed: the plan writes nothing and
+raises whatever the run would, so showing them costs a person nothing.
 
 **Stopping.** `Ctrl-C` sets the stop predicate rather than killing the
 process: the build walks its ladder down, releases the build directory
