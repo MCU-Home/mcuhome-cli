@@ -180,7 +180,10 @@ def arguments(
     answered: list[api.Argument] = []
     for flag in option_flags() if flags is None else flags:
         raw = getattr(namespace, flag.dest, None)
-        if raw is None:
+        if raw is None or flag.option.bootstrap:
+            # The bootstrap option decides where the project layer is and
+            # is consumed before the merge runs; handing it to the
+            # configuration layer is what that layer refuses.
             continue
         answered.append(
             api.Argument(
