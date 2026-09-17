@@ -80,10 +80,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
+        # A retired spelling is refused before anything is answered, so
+        # that `mcuhome --version --build-dir /x` does not accept the
+        # flag by answering something else. Help stays ahead of both: a
+        # person asking for help has already said what they need.
+        refuse_retired_spelling(tokens)
         if "--version" in takewhile(lambda token: token.startswith("-"), tokens):
             print(version_text())
             return phases.EXIT_OK
-        refuse_retired_spelling(tokens)
         args = parser.parse_args(tokens)
         handler = getattr(args, "handler", None)
         if handler is None:
