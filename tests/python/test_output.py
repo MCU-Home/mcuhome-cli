@@ -103,6 +103,28 @@ class TestTheVerbs:
             assert "MCUHOME_DOCKER is set." in captured.err
             assert "unset it" in captured.err
 
+    def test_a_fix_is_its_own_line_under_the_finding(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The layout a rendered refusal has, for the same reason.
+
+        A hint joined to the message with a space is one long line whose
+        second half nobody reads as an instruction.
+        """
+        Output(mode=HUMAN).finding(
+            {
+                "severity": "error",
+                "message": "MCUHOME_DOCKER is set.",
+                "hint": "unset it:\n    unset MCUHOME_DOCKER",
+            }
+        )
+        lines = capsys.readouterr().err.splitlines()
+        assert lines == [
+            "Error: MCUHOME_DOCKER is set.",
+            "  Fix: unset it:",
+            "           unset MCUHOME_DOCKER",
+        ]
+
     def test_the_stream_never_carries_translated_vocabulary(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:

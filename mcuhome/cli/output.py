@@ -337,10 +337,20 @@ class Output:
 
     @staticmethod
     def _sentence(finding: Mapping[str, Any]) -> str:
-        """A finding as one line: what it is, and the fix where there is one."""
+        """A finding as a person reads it: what it is, then how to fix it.
+
+        The layout a rendered refusal has — the condition on its line
+        and ``Fix:`` indented under it — because the two say the same
+        kind of thing about different conditions. A hint run onto the
+        end of the message with a space makes one long line whose second
+        half nobody sees as an instruction, and a hint that is itself
+        several lines makes it unreadable.
+        """
         message = str(finding.get("message", ""))
         hint = finding.get("hint")
-        return f"{message} {hint}" if hint else message
+        if not hint:
+            return message
+        return f"{message}\n  {_('Fix:')} " + str(hint).replace("\n", "\n       ")
 
     def _event(self, message: dict[str, Any]) -> None:
         # One message per line, flushed as it happens: a live consumer is
