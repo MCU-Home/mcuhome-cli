@@ -85,6 +85,15 @@ class TestDeviceNew:
         assert "name: kitchen" in document["text"]
         assert list((in_project / "devices").iterdir()) == []
 
+    def test_a_dry_run_prints_the_file_and_nothing_else(
+        self, in_project: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        # What a person does with it is redirect it into a file.
+        assert main(["device", "new", "kitchen", "--board", BOARD, "--dry-run"]) == 0
+        printed = capsys.readouterr()
+        assert printed.out == api.render_device_file("kitchen", board=BOARD).rstrip("\n") + "\n"
+        assert "Nothing was written" in printed.err
+
     def test_the_friendly_name_is_what_a_controller_shows(
         self, in_project: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:

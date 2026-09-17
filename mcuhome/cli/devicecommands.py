@@ -75,8 +75,12 @@ def device_new(invocation: Invocation) -> int:
         # the refusals a board or a name earns are the same ones the
         # writing call gives, because the rendering raises them too.
         text = api.render_device_file(name, board=board, friendly_name=friendly_name)
-        output.human(text)
-        output.human(output.muted(_("Nothing was written (--dry-run).")))
+        # The file and nothing else on stdout, because the obvious next
+        # thing a person does with it is redirect it into one; the note
+        # that nothing was written is for them and goes to stderr.
+        output.human(text.rstrip("\n"))
+        if not output.machine:
+            output.log(output.muted(_("Nothing was written (--dry-run).")))
         output.result({"ok": True, "dry_run": True, "name": name, "board": board, "text": text})
         return EXIT_OK
     created = api.create_device(name, project=project, board=board, friendly_name=friendly_name)
