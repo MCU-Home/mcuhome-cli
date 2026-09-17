@@ -474,12 +474,7 @@ def _name_of(entry: Path) -> str:
 def _stated_out_dir(invocation: Invocation) -> Path | None:
     """``--out-dir`` as an absolute path, or ``None`` where it was not used."""
     stated = invocation.flag("out_dir")
-    if stated is None:
-        return None
-    path = api.expand_user_path(str(stated), env=invocation.env)
-    if not path.is_absolute():
-        path = invocation.cwd / path
-    return path.resolve()
+    return None if stated is None else invocation.path(str(stated))
 
 
 def _is_build_target(path: Path) -> bool:

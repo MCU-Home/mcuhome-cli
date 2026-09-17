@@ -437,12 +437,7 @@ def _stated_directory(invocation: Invocation) -> Path | None:
     typed, found by the upward search or not typed at all.
     """
     stated = invocation.flag("directory")
-    if stated is None:
-        return None
-    directory = api.expand_user_path(str(stated), env=invocation.env)
-    if not directory.is_absolute():
-        directory = invocation.cwd / directory
-    return directory.resolve()
+    return None if stated is None else invocation.path(str(stated))
 
 
 def _project(invocation: Invocation, *, allow_upgrading: bool = False) -> api.Project:
