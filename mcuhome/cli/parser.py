@@ -52,7 +52,7 @@ __all__ = ["Presentation", "build_parser", "read_presentation"]
 
 #: What a command that is not implemented in this version says it waits
 #: on. The three platform acts name their own work instead.
-_NOT_YET = (
+_NOT_YET = _(
     "this version of MCUHome does not implement it yet; mcuhome version says which one is installed"
 )
 
