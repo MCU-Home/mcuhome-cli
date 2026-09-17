@@ -1166,10 +1166,12 @@ rather than unpacked a second time.
 What a build on this machine would need, reported rather than raised:
 one finding per thing examined, each with what was found and the fix
 where there is one. Which checks run follows the configured mode — the
-container runtime and the image search only for `container`, the
-environment store and the interpreter only for `subprocess` — because
-the two need disjoint things of a host, and reporting on what this
-machine will never run is noise. The signing program, the compiler
+container runtime and the image search only for `container`; the
+interpreter only for `subprocess`, beside either the west workspace a
+development build compiles in, where `build.dev_workspace` names one,
+or the build-environment store that holds the packages where it does
+not — because the modes need disjoint things of a host, and reporting
+on what this machine will never run is noise. The signing program, the compiler
 cache, the project, the resolved configuration, the configured builders
 and the permissions of the project's secrets are examined either way —
 every one of them a finding of the same shape, so the command renders a

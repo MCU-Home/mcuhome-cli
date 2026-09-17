@@ -91,10 +91,12 @@ $ mcuhome config set build.mode subprocess --scope user
 `mcuhome host check` answers the same question for the machine rather than
 for one build: one finding per thing it examined, with the fix where there
 is one. What it probes follows the configured mode — the container runtime
-and the image search for `container`, the environment store and the
-interpreter for `subprocess` — while the signing program, the compiler
-cache, the project, the resolved configuration, the configured builders and
-the permissions of the project's secrets are examined either way.
+and the image search for `container`; the interpreter for `subprocess`,
+beside either the west workspace a development build compiles in or the
+build-environment store that holds the packages — while the signing
+program, the compiler cache, the project, the resolved configuration, the
+configured builders and the permissions of the project's secrets are
+examined either way.
 
 ### Building against your own west workspace
 
