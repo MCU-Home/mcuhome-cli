@@ -750,7 +750,12 @@ out_dir, report, container_image, artifacts, diagnostics}`), `signing`
 is `SigningResult.to_dict()` or `null` for `--no-sign`, and `footprint`
 the memory regions the build report measured, each `{image, region,
 used, total}`. `ok` is true when the build produced its artifacts and,
-where it signed, the signing answered `ok`.
+where it signed, the signing answered `ok`. A build report this version
+cannot read does not take the run's answer away: `footprint` is `[]`,
+`build.report` still names the file, and the unreadable report is a
+finding — a `diagnostic` message under `json-stream`, and a line on
+stderr in `human` and under `-o json`, because this document declares no
+list of its own to carry it.
 
 `out_dir` is the build directory itself: the artifacts, the report and
 the signed images are at the top of it, under plain names, because what
