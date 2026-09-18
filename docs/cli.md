@@ -330,6 +330,7 @@ commands that resolve this machine's `build` section:
 | `--build-container-repositories` | string, repeatable | `build.container_repositories` | `MCUHOME_BUILD_CONTAINER_REPOSITORIES` |
 | `--build-cpus` | number > 0 | `build.cpus` | `MCUHOME_BUILD_CPUS` |
 | `--build-memory` | bytes, or a `k`/`m`/`g` suffix | `build.memory` | `MCUHOME_BUILD_MEMORY` |
+| `--build-pids` | integer ≥ 1 | `build.pids` | `MCUHOME_BUILD_PIDS` |
 | `--build-env-store` | path | `build.env_store` | `MCUHOME_BUILD_ENV_STORE` |
 | `--build-dev-workspace` | path | `build.dev_workspace` | `MCUHOME_BUILD_DEV_WORKSPACE` |
 | `--build-python` | string | `build.python` | `MCUHOME_BUILD_PYTHON` |
